@@ -1,0 +1,26 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.hypothesis/
+
+# Node.js
+node_modules/
+dist/
+coverage/
+
+# Environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.aws/
+
+# Local files
+.DS_Store
+Thumbs.db
+# Local MCP configuration (may contain credentials)
+.kiro/settings/mcp.json

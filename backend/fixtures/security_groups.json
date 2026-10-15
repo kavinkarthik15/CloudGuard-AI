@@ -1,0 +1,258 @@
+[
+  {
+    "group_id": "sg-sim-0001",
+    "group_name": "simulated-bastion-sg",
+    "description": "Simulated bastion host security group — SSH open to world",
+    "vpc_id": "vpc-sim-0001",
+    "inbound_rules": [
+      {
+        "protocol": "tcp",
+        "from_port": 22,
+        "to_port": 22,
+        "cidr_ipv4": "0.0.0.0/0",
+        "cidr_ipv6": null,
+        "description": "SSH from anywhere"
+      },
+      {
+        "protocol": "tcp",
+        "from_port": 443,
+        "to_port": 443,
+        "cidr_ipv4": "0.0.0.0/0",
+        "cidr_ipv6": null,
+        "description": "HTTPS"
+      }
+    ]
+  },
+  {
+    "group_id": "sg-sim-0002",
+    "group_name": "simulated-rdp-admin-sg",
+    "description": "Simulated Windows admin SG — RDP open to world",
+    "vpc_id": "vpc-sim-0001",
+    "inbound_rules": [
+      {
+        "protocol": "tcp",
+        "from_port": 3389,
+        "to_port": 3389,
+        "cidr_ipv4": "0.0.0.0/0",
+        "cidr_ipv6": null,
+        "description": "RDP from anywhere"
+      }
+    ]
+  },
+  {
+    "group_id": "sg-sim-0003",
+    "group_name": "simulated-database-sg",
+    "description": "Simulated database SG — MySQL open to world",
+    "vpc_id": "vpc-sim-0002",
+    "inbound_rules": [
+      {
+        "protocol": "tcp",
+        "from_port": 3306,
+        "to_port": 3306,
+        "cidr_ipv4": "0.0.0.0/0",
+        "cidr_ipv6": null,
+        "description": "MySQL from anywhere"
+      },
+      {
+        "protocol": "tcp",
+        "from_port": 5432,
+        "to_port": 5432,
+        "cidr_ipv4": "0.0.0.0/0",
+        "cidr_ipv6": null,
+        "description": "PostgreSQL from anywhere"
+      }
+    ]
+  },
+  {
+    "group_id": "sg-sim-0004",
+    "group_name": "simulated-wide-open-sg",
+    "description": "Simulated SG with all-ports open — critical misconfiguration",
+    "vpc_id": "vpc-sim-0001",
+    "inbound_rules": [
+      {
+        "protocol": "-1",
+        "from_port": null,
+        "to_port": null,
+        "cidr_ipv4": "0.0.0.0/0",
+        "cidr_ipv6": null,
+        "description": "All traffic from anywhere"
+      }
+    ]
+  },
+  {
+    "group_id": "sg-sim-0005",
+    "group_name": "simulated-custom-port-sg",
+    "description": "Simulated SG with non-standard high-risk port open",
+    "vpc_id": "vpc-sim-0002",
+    "inbound_rules": [
+      {
+        "protocol": "tcp",
+        "from_port": 8080,
+        "to_port": 8080,
+        "cidr_ipv4": "0.0.0.0/0",
+        "cidr_ipv6": null,
+        "description": "App server on 8080 from anywhere"
+      },
+      {
+        "protocol": "tcp",
+        "from_port": 9200,
+        "to_port": 9200,
+        "cidr_ipv4": "0.0.0.0/0",
+        "cidr_ipv6": null,
+        "description": "Elasticsearch from anywhere"
+      }
+    ]
+  },
+  {
+    "group_id": "sg-sim-0006",
+    "group_name": "simulated-ipv6-exposed-sg",
+    "description": "Simulated SG with IPv6 world-open rules",
+    "vpc_id": "vpc-sim-0003",
+    "inbound_rules": [
+      {
+        "protocol": "tcp",
+        "from_port": 22,
+        "to_port": 22,
+        "cidr_ipv4": null,
+        "cidr_ipv6": "::/0",
+        "description": "SSH from anywhere over IPv6"
+      },
+      {
+        "protocol": "tcp",
+        "from_port": 6379,
+        "to_port": 6379,
+        "cidr_ipv4": null,
+        "cidr_ipv6": "::/0",
+        "description": "Redis from anywhere over IPv6"
+      }
+    ]
+  },
+  {
+    "group_id": "sg-sim-0007",
+    "group_name": "simulated-web-public-sg",
+    "description": "Simulated public web tier — only HTTP and HTTPS open",
+    "vpc_id": "vpc-sim-0001",
+    "inbound_rules": [
+      {
+        "protocol": "tcp",
+        "from_port": 80,
+        "to_port": 80,
+        "cidr_ipv4": "0.0.0.0/0",
+        "cidr_ipv6": "::/0",
+        "description": "HTTP"
+      },
+      {
+        "protocol": "tcp",
+        "from_port": 443,
+        "to_port": 443,
+        "cidr_ipv4": "0.0.0.0/0",
+        "cidr_ipv6": "::/0",
+        "description": "HTTPS"
+      }
+    ]
+  },
+  {
+    "group_id": "sg-sim-0008",
+    "group_name": "simulated-duplicate-ssh-sg",
+    "description": "Simulated SG with duplicate SSH rules to test consolidation",
+    "vpc_id": "vpc-sim-0002",
+    "inbound_rules": [
+      {
+        "protocol": "tcp",
+        "from_port": 22,
+        "to_port": 22,
+        "cidr_ipv4": "0.0.0.0/0",
+        "cidr_ipv6": null,
+        "description": "SSH rule 1"
+      },
+      {
+        "protocol": "tcp",
+        "from_port": 22,
+        "to_port": 22,
+        "cidr_ipv4": null,
+        "cidr_ipv6": "::/0",
+        "description": "SSH rule 2 (IPv6)"
+      }
+    ]
+  },
+  {
+    "group_id": "sg-sim-0009",
+    "group_name": "simulated-restricted-internal-sg",
+    "description": "Simulated fully restricted SG — internal traffic only",
+    "vpc_id": "vpc-sim-0003",
+    "inbound_rules": [
+      {
+        "protocol": "tcp",
+        "from_port": 443,
+        "to_port": 443,
+        "cidr_ipv4": "10.0.0.0/8",
+        "cidr_ipv6": null,
+        "description": "HTTPS from private network only"
+      },
+      {
+        "protocol": "tcp",
+        "from_port": 5432,
+        "to_port": 5432,
+        "cidr_ipv4": "172.16.0.0/12",
+        "cidr_ipv6": null,
+        "description": "PostgreSQL from VPC only"
+      }
+    ]
+  },
+  {
+    "group_id": "sg-sim-0010",
+    "group_name": "simulated-analytics-sg",
+    "description": "Simulated analytics cluster SG with multiple risky ports",
+    "vpc_id": "vpc-sim-0003",
+    "inbound_rules": [
+      {
+        "protocol": "tcp",
+        "from_port": 27017,
+        "to_port": 27017,
+        "cidr_ipv4": "0.0.0.0/0",
+        "cidr_ipv6": null,
+        "description": "MongoDB from anywhere"
+      },
+      {
+        "protocol": "tcp",
+        "from_port": 1433,
+        "to_port": 1433,
+        "cidr_ipv4": "0.0.0.0/0",
+        "cidr_ipv6": null,
+        "description": "MSSQL from anywhere"
+      },
+      {
+        "protocol": "tcp",
+        "from_port": 80,
+        "to_port": 80,
+        "cidr_ipv4": "0.0.0.0/0",
+        "cidr_ipv6": null,
+        "description": "HTTP dashboard"
+      }
+    ]
+  },
+  {
+    "group_id": "sg-sim-0011",
+    "group_name": "simulated-cache-sg",
+    "description": "Simulated cache tier with Redis and Memcached exposed",
+    "vpc_id": "vpc-sim-0002",
+    "inbound_rules": [
+      {
+        "protocol": "tcp",
+        "from_port": 6379,
+        "to_port": 6379,
+        "cidr_ipv4": "0.0.0.0/0",
+        "cidr_ipv6": null,
+        "description": "Redis from anywhere"
+      },
+      {
+        "protocol": "tcp",
+        "from_port": 11211,
+        "to_port": 11211,
+        "cidr_ipv4": "0.0.0.0/0",
+        "cidr_ipv6": null,
+        "description": "Memcached from anywhere"
+      }
+    ]
+  }
+]
