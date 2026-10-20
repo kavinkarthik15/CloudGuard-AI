@@ -1,4 +1,5 @@
 @echo off
 echo Starting CloudGuard AI Backend...
+echo NOTE: Backend binds to 127.0.0.1:8001 (local only)
 cd /d "d:\CloudGuard AI\backend"
-.venv\Scripts\python.exe -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
+.venv\Scripts\python.exe -m uvicorn main:app --reload --host 127.0.0.1 --port 8001
