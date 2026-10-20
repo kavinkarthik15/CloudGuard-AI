@@ -1,6 +1,7 @@
 /**
  * TypeScript types mirroring the backend Pydantic models.
- * All types represent SIMULATED data — not real AWS resources.
+ * Session 1: simulated findings. Session 2: adds ScanMode, IdentityInfo,
+ * and live scan fields on ScanResult.
  */
 
 // ---------------------------------------------------------------------------
@@ -60,6 +61,13 @@ export const SEVERITY_COLORS: Record<Severity, {
     card: 'border-slate-500/30 bg-slate-900/20',
   },
 }
+
+// ---------------------------------------------------------------------------
+// Scan mode — mirrors backend ScanMode enum
+// ---------------------------------------------------------------------------
+
+/** Explicit per-request scan mode. Must match backend ScanMode values exactly. */
+export type ScanMode = 'demo' | 'live'
 
 // ---------------------------------------------------------------------------
 // S3 resource models
@@ -126,6 +134,7 @@ export interface Finding {
   evidence: Record<string, unknown>
   risk_explanation: string
   remediation: string
+  /** true = generated from JSON fixtures; false = generated from real AWS APIs */
   simulated: boolean
 }
 
@@ -137,22 +146,75 @@ export interface Warning {
 export interface ScanResult {
   scan_id: string
   timestamp: string
+  /** Reflects actual data source, not merely the requested mode. */
   simulated: boolean
   region: string
   findings: Finding[]
   warnings: Warning[]
   summary: Record<string, number>
+  /** Populated only for live scans. Never contains credentials. */
+  aws_account_id: string | null
+  aws_identity_arn: string | null
 }
 
 // ---------------------------------------------------------------------------
-// API models
+// API request / response models
 // ---------------------------------------------------------------------------
 
 export interface ScanRequest {
   region?: string
+  /** Must be sent explicitly on every request. No implicit default in the client. */
+  mode: ScanMode
+  /** AWS CLI profile name for live scans. Defaults to the backend's configured profile (AWS_PROFILE env var or 'default'). */
+  aws_profile?: string
+}
+
+/** AWS caller identity returned by GET /api/identity — no credentials included. */
+export interface IdentityInfo {
+  account_id: string
+  arn: string
+  user_id: string
+  region: string
+  profile: string | null
 }
 
 export interface ErrorResponse {
   code: string
   message: string
+}
+
+/**
+ * AWS CLI profiles discovered on the local machine.
+ * Contains profile names only — no credential values, file paths, or secrets.
+ */
+export interface ProfilesResponse {
+  profiles: string[]
+  /** AWS_PROFILE env var value if set, otherwise null. */
+  default_profile: string | null
+  /** Non-null if botocore could not read the AWS configuration files. */
+  discovery_error: string | null
+}
+
+/** Metadata about a single AWS region for the region selector. */
+export interface RegionInfo {
+  name: string         // e.g. "eu-north-1"
+  description: string  // e.g. "Europe (Stockholm)"
+  /**
+   * true  = account has opted into this region (or opt-in not required)
+   * false = account has NOT opted in
+   * null  = availability unknown (DescribeRegions not called or failed)
+   */
+  enabled: boolean | null
+}
+
+/**
+ * Region list response from GET /api/regions.
+ * regions is always populated from botocore metadata (no AWS call).
+ * enabled_regions_available is true only when ec2:DescribeRegions succeeded.
+ */
+export interface RegionsResponse {
+  regions: RegionInfo[]
+  enabled_regions_available: boolean
+  default_region: string
+  describe_regions_error: string | null
 }

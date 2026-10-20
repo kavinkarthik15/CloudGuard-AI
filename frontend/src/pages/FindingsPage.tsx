@@ -31,8 +31,8 @@ export function FindingsPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-100">Security Findings</h1>
           <p className="mt-1 text-slate-500 text-sm">
-            {status === 'complete'
-              ? `${allFindings.length} total findings from simulated resource analysis`
+            {status === 'complete' && scanResult
+              ? `${allFindings.length} total findings from ${scanResult.simulated ? 'simulated' : 'live AWS'} resource analysis`
               : 'Run a scan to see findings'}
           </p>
         </div>
@@ -47,7 +47,7 @@ export function FindingsPage() {
       {/* Loading */}
       {status === 'scanning' && (
         <div className="card flex items-center justify-center py-16">
-          <LoadingSpinner size="lg" label="Scanning simulated configurations…" />
+          <LoadingSpinner size="lg" label="Scanning configurations…" />
         </div>
       )}
 
@@ -55,7 +55,7 @@ export function FindingsPage() {
       {status === 'idle' && !scanResult && (
         <EmptyState
           title="Run a scan to see findings"
-          description="Navigate to Scan to trigger a simulated security analysis."
+          description="Navigate to Scan to trigger a security analysis."
         />
       )}
 

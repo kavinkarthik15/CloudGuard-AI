@@ -6,3 +6,4 @@ pytest==9.1.1
 pytest-asyncio==1.4.0
 hypothesis==6.169.0
 httpx==0.28.1
+boto3==1.38.0

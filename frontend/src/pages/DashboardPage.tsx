@@ -23,7 +23,7 @@ export function DashboardPage() {
   const { status, scanResult, error, lastScanAt, triggerScan, clearError } = useScanStore()
   const [warningsOpen, setWarningsOpen] = useState(false)
 
-  // Auto-trigger scan on first load if no result yet
+  // Auto-trigger demo scan on first load if no result yet
   useEffect(() => {
     if (scanResult === null && status === 'idle') {
       triggerScan()
@@ -31,6 +31,18 @@ export function DashboardPage() {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const totalFindings = scanResult?.findings.length ?? 0
+  const isLiveResult = scanResult !== null && !scanResult.simulated
+
+  // Derive subtitle from the actual scan result, not the selected mode
+  const subtitle = isLiveResult
+    ? `Live AWS account ${scanResult.aws_account_id ?? ''} · ${scanResult.region}`
+    : 'Simulated AWS misconfiguration analysis — not real infrastructure'
+
+  // Derive loading label from selected mode
+  const { selectedMode } = useScanStore()
+  const scanningLabel = selectedMode === 'live'
+    ? 'Scanning real AWS configurations…'
+    : 'Running security analysis on simulated configurations…'
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
@@ -38,9 +50,7 @@ export function DashboardPage() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-100">Security Dashboard</h1>
-          <p className="mt-1 text-slate-500 text-sm">
-            Simulated AWS misconfiguration analysis — not real infrastructure
-          </p>
+          <p className="mt-1 text-slate-500 text-sm">{subtitle}</p>
         </div>
         <div className="flex items-center gap-3">
           {status === 'complete' && lastScanAt && (
@@ -79,7 +89,7 @@ export function DashboardPage() {
       {/* Loading state */}
       {status === 'scanning' && (
         <div className="card flex items-center justify-center py-16">
-          <LoadingSpinner size="lg" label="Running security analysis on simulated configurations…" />
+          <LoadingSpinner size="lg" label={scanningLabel} />
         </div>
       )}
 
@@ -93,15 +103,38 @@ export function DashboardPage() {
           </section>
 
           {/* Scan completion notice */}
-          <div className="flex items-center gap-2 text-sm text-slate-400 bg-navy-800/50 border border-navy-700 rounded-lg px-4 py-3">
-            <svg className="w-4 h-4 text-green-500 shrink-0" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
+          <div className={`flex items-center gap-2 text-sm text-slate-400 rounded-lg px-4 py-3 border ${
+            isLiveResult
+              ? 'bg-green-950/10 border-green-500/20'
+              : 'bg-navy-800/50 border-navy-700'
+          }`}>
+            <svg className={`w-4 h-4 shrink-0 ${isLiveResult ? 'text-green-500' : 'text-green-500'}`} fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
               <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
             </svg>
             <span>
-              Scan complete — <strong className="text-slate-200">{totalFindings} findings</strong> identified
+              Scan complete —{' '}
+              <strong className="text-slate-200">{totalFindings} findings</strong>{' '}
+              identified
               {lastScanAt && <> at {formatTimestamp(lastScanAt)}</>}
+              {isLiveResult && scanResult.aws_account_id && (
+                <> · Account <span className="font-mono text-slate-300">{scanResult.aws_account_id}</span></>
+              )}
             </span>
+            {isLiveResult && (
+              <span className="ml-auto text-xs text-green-400/80 font-medium">Live AWS</span>
+            )}
           </div>
+
+          {/* Zero findings note for live scans */}
+          {totalFindings === 0 && isLiveResult && (
+            <div className="card border-slate-600/30 bg-slate-800/20">
+              <p className="text-sm text-slate-400">
+                <strong className="text-slate-300">No findings detected</strong> in this live scan.
+                This means no misconfigurations matching the current rules were found in the scanned
+                resources — it does not guarantee a fully secure configuration.
+              </p>
+            </div>
+          )}
 
           {/* Chart + Recent findings */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -152,8 +185,8 @@ export function DashboardPage() {
         </>
       )}
 
-      {/* Empty state */}
-      {status === 'complete' && scanResult && totalFindings === 0 && (
+      {/* Empty state for demo scan with zero findings */}
+      {status === 'complete' && scanResult && totalFindings === 0 && !isLiveResult && (
         <div className="card">
           <div className="flex flex-col items-center py-12 text-center">
             <div className="w-12 h-12 rounded-full bg-green-900/30 flex items-center justify-center mb-4" aria-hidden="true">

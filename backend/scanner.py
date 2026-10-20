@@ -2,18 +2,39 @@
 Scanner orchestrator — coordinates provider + analyzers to produce ScanResult.
 
 The Scanner accepts any ScannerProvider implementation and calls only the
-interface methods. It does not import SimulatedScannerProvider directly,
-preserving the Session 2 extension point.
+interface methods. It does not import SimulatedScannerProvider or
+Boto3ScannerProvider directly, preserving the extension point.
+
+For live (non-simulated) scans, finding text that references simulated data
+is rewritten to accurately reflect the live source. The security rules
+themselves are unchanged.
 """
 from __future__ import annotations
 
-import traceback
 from datetime import datetime, timezone
 
 from analyzers.ec2_rules import analyze_security_group
 from analyzers.s3_rules import analyze_s3_bucket
 from models import SEVERITY_ORDER, Finding, ScanResult, Severity, Warning
 from providers.base import ScannerProvider
+
+# Text substituted in risk_explanation when findings come from live AWS data.
+# The S1 analyzers embed this prefix; for live scans it must be replaced.
+_SIM_PREFIX = "This finding is based on simulated configuration data."
+_LIVE_PREFIX = "This finding is based on live AWS configuration data."
+
+
+def _rewrite_finding_for_live(finding: Finding) -> Finding:
+    """Return a new Finding with live-scan text and simulated=False.
+
+    Uses model_copy to avoid mutating the original (findings are immutable
+    once produced by the analyzers).
+    """
+    new_explanation = finding.risk_explanation.replace(_SIM_PREFIX, _LIVE_PREFIX)
+    return finding.model_copy(update={
+        "simulated": False,
+        "risk_explanation": new_explanation,
+    })
 
 
 class Scanner:
@@ -22,11 +43,31 @@ class Scanner:
     def __init__(self, provider: ScannerProvider) -> None:
         self._provider = provider
 
-    def run(self, region: str = "us-east-1") -> ScanResult:
+    def run(
+        self,
+        region: str = "us-east-1",
+        simulated: bool = True,
+        aws_account_id: str | None = None,
+        aws_identity_arn: str | None = None,
+    ) -> ScanResult:
         """Execute a full scan session and return a ScanResult.
 
-        Catches per-resource errors as Warnings so partial failures don't
-        abort the entire scan.
+        Parameters
+        ----------
+        region:
+            AWS region for EC2 security group enumeration.
+        simulated:
+            True for demo mode, False for live AWS mode.
+            Controls finding labels and ScanResult.simulated flag.
+        aws_account_id:
+            Populated for live scans from sts:GetCallerIdentity.
+            Never set for simulated scans.
+        aws_identity_arn:
+            Populated for live scans from sts:GetCallerIdentity.
+            Never set for simulated scans.
+
+        The method catches per-resource errors as Warnings so partial
+        failures don't abort the entire scan.
         """
         all_findings: list[Finding] = []
         all_warnings: list[Warning] = []
@@ -44,6 +85,8 @@ class Scanner:
         for bucket in buckets:
             try:
                 findings = analyze_s3_bucket(bucket)
+                if not simulated:
+                    findings = [_rewrite_finding_for_live(f) for f in findings]
                 all_findings.extend(findings)
             except Exception as exc:
                 all_warnings.append(Warning(
@@ -64,6 +107,8 @@ class Scanner:
         for sg in security_groups:
             try:
                 findings = analyze_security_group(sg)
+                if not simulated:
+                    findings = [_rewrite_finding_for_live(f) for f in findings]
                 all_findings.extend(findings)
             except Exception as exc:
                 all_warnings.append(Warning(
@@ -78,9 +123,11 @@ class Scanner:
 
         return ScanResult(
             timestamp=datetime.now(timezone.utc).isoformat(),
-            simulated=True,
+            simulated=simulated,
             region=region,
             findings=all_findings,
             warnings=all_warnings,
             summary=summary,
+            aws_account_id=aws_account_id,
+            aws_identity_arn=aws_identity_arn,
         )

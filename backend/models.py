@@ -1,7 +1,9 @@
 """
-Pydantic v2 data models for CloudGuard AI Session 1.
-All models are used for simulated resource configurations and findings.
-No real AWS credentials or API calls are involved.
+Pydantic v2 data models for CloudGuard AI.
+
+Session 1: All models used for simulated resource configurations.
+Session 2: ScanMode, IdentityInfo, and ScanResult.aws_account_id added for live AWS scanning.
+No AWS credentials are ever stored in or passed through these models.
 """
 from __future__ import annotations
 
@@ -87,7 +89,9 @@ class EncryptionConfig(BaseModel):
 
 
 class S3BucketConfig(BaseModel):
-    """Simulated S3 bucket configuration for security analysis."""
+    """S3 bucket configuration for security analysis.
+    Used by both SimulatedScannerProvider (Session 1) and Boto3ScannerProvider (Session 2).
+    """
     name: str
     public_access_block: PublicAccessBlockConfig
     acl_grants: list[AclGrant] = Field(default_factory=list)
@@ -112,7 +116,9 @@ class InboundRule(BaseModel):
 
 
 class SecurityGroupConfig(BaseModel):
-    """Simulated EC2 security group configuration for security analysis."""
+    """EC2 security group configuration for security analysis.
+    Used by both SimulatedScannerProvider (Session 1) and Boto3ScannerProvider (Session 2).
+    """
     group_id: str
     group_name: str
     description: str
@@ -134,11 +140,11 @@ class Finding(BaseModel):
     evidence: dict              # Specific config values that triggered the rule
     risk_explanation: str
     remediation: str
-    simulated: bool = True
+    simulated: bool = True      # False for live AWS findings
 
 
 class Warning(BaseModel):
-    """A resource that could not be fully scanned."""
+    """A resource that could not be fully scanned, with the reason."""
     resource_id: str
     reason: str
 
@@ -154,18 +160,90 @@ class ScanResult(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     warnings: list[Warning] = Field(default_factory=list)
     summary: dict[str, int] = Field(default_factory=dict)
+    # Session 2: live scan identity metadata — None for simulated scans.
+    # Never populated with raw credentials or session tokens.
+    aws_account_id: Optional[str] = None
+    aws_identity_arn: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
 # API request / response models
 # ---------------------------------------------------------------------------
 
+class ScanMode(str, Enum):
+    """Explicit per-request scan mode.
+
+    demo: Uses SimulatedScannerProvider with JSON fixtures. No AWS credentials needed.
+    live: Uses Boto3ScannerProvider with real AWS APIs. Requires a valid SSO session.
+
+    The mode is declared by the caller on every request. The backend never
+    infers mode from a previous request or falls back silently.
+    """
+    demo = "demo"
+    live = "live"
+
+
 class ScanRequest(BaseModel):
     """Request body for POST /api/scan."""
     region: str = "us-east-1"
+    mode: ScanMode = ScanMode.demo
+    aws_profile: Optional[str] = None
+    # Optional profile override for live mode. Defaults to AWS_PROFILE env var
+    # or the standard 'default' profile if neither is set. Ignored for demo mode.
+    # Never persisted or logged by the backend.
+
+
+class IdentityInfo(BaseModel):
+    """AWS caller identity — returned by GET /api/identity.
+    Contains only account/identity metadata, never credentials or tokens.
+    """
+    account_id: str
+    arn: str
+    user_id: str
+    region: str
+    profile: Optional[str] = None
 
 
 class ErrorResponse(BaseModel):
-    """Standard error response body."""
+    """Standard structured error response body."""
     code: str
     message: str
+
+
+class ProfilesResponse(BaseModel):
+    """AWS CLI profiles discovered on the local machine.
+
+    Contains profile names only — no credential values, file paths,
+    or secrets are included.
+    """
+    profiles: list[str]
+    default_profile: Optional[str]  # AWS_PROFILE env var value, if set and non-empty
+    discovery_error: Optional[str] = None  # set if botocore config was unreadable
+
+
+class RegionInfo(BaseModel):
+    """Metadata about a single AWS region."""
+    name: str            # e.g. "eu-north-1"
+    description: str     # human-readable label, e.g. "Europe (Stockholm)"
+    # True = account has opted in (or region requires no opt-in).
+    # False = account has NOT opted in.
+    # None = availability could not be determined (DescribeRegions not called or failed).
+    enabled: Optional[bool] = None
+
+
+class RegionsResponse(BaseModel):
+    """AWS regions available for EC2 security group scanning.
+
+    known_regions is sourced from botocore endpoint metadata and is always
+    populated without making any AWS API call.
+
+    enabled_regions is populated only when ec2:DescribeRegions succeeds
+    for the given profile. If the call fails or was not attempted,
+    enabled_regions_available is False and known_regions should be used.
+
+    Note: S3 scanning is always global and is not affected by region selection.
+    """
+    regions: list[RegionInfo]
+    enabled_regions_available: bool  # True if DescribeRegions was called successfully
+    default_region: str              # backend default (AWS_DEFAULT_REGION or eu-north-1)
+    describe_regions_error: Optional[str] = None  # human-readable if DescribeRegions failed

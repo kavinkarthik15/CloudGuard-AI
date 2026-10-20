@@ -93,4 +93,15 @@ describe('ExportButton', () => {
     const button = screen.getByRole('button', { name: /export report/i })
     expect(button).not.toBeDisabled()
   })
+
+  it('displays SCAN_NOT_FOUND error with helpful message', () => {
+    const scanNotFoundMsg =
+      'This scan is no longer available on the server (it may have expired or the ' +
+      'server restarted). Re-run the scan and export immediately after it completes.'
+    setupMock({ canExport: true, exportError: scanNotFoundMsg })
+    render(<ExportButton />)
+    expect(screen.getByText(scanNotFoundMsg)).toBeInTheDocument()
+    // Button must still be enabled so user can re-run
+    expect(screen.getByRole('button', { name: /export report/i })).not.toBeDisabled()
+  })
 })

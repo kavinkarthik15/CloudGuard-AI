@@ -39,7 +39,6 @@ export function ExportButton() {
       {/* Dropdown menu */}
       {open && (
         <>
-          {/* Backdrop */}
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} aria-hidden="true" />
           <div
             role="menu"
@@ -70,8 +69,9 @@ export function ExportButton() {
         </>
       )}
 
+      {/* Error notification (includes SCAN_NOT_FOUND with retry guidance) */}
       {exportError && (
-        <div className="absolute top-full mt-2 right-0 w-72 z-30">
+        <div className="absolute top-full mt-2 right-0 w-80 z-30">
           <ErrorBanner message={exportError} onDismiss={clearExportError} />
         </div>
       )}

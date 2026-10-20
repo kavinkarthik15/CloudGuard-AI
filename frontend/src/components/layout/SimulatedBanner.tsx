@@ -1,9 +1,44 @@
 /**
- * Persistent "Demo Mode — Simulated Data" banner.
- * Always visible. Cannot be dismissed.
- * Required by Requirement 1.2.
+ * Mode-aware top banner.
+ *
+ * Displays the amber "Demo Mode — Simulated Data" banner when the current
+ * scan result is simulated (ScanResult.simulated === true, or no result yet).
+ *
+ * Displays a green "Live AWS" indicator when a real scan result is present
+ * (ScanResult.simulated === false). This is based on the RESULT, not the
+ * selected mode, so a failed live scan never shows a live indicator.
+ *
+ * The demo banner is never dismissible. The live indicator is persistent.
  */
+import { useScanStore } from '../../store/scanStore'
+
 export function SimulatedBanner() {
+  const { scanResult } = useScanStore()
+
+  // Determine provenance from the actual scan result, not from selectedMode.
+  // No result yet → show demo banner (safe default).
+  const isLiveResult = scanResult !== null && scanResult.simulated === false
+
+  if (isLiveResult) {
+    return (
+      <div
+        role="status"
+        aria-live="polite"
+        className="w-full bg-green-900/20 border-b border-green-500/30 px-4 py-2 flex items-center justify-center gap-2.5 text-green-400 text-xs font-medium"
+      >
+        <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" aria-hidden="true" />
+        <span>
+          <strong className="font-semibold">Live AWS Scan</strong>
+          {scanResult.aws_account_id && (
+            <> · Account <span className="font-mono">{scanResult.aws_account_id}</span></>
+          )}
+          {' '}· Region <span className="font-mono">{scanResult.region}</span>
+          {' '}· All findings reflect real AWS configuration data.
+        </span>
+      </div>
+    )
+  }
+
   return (
     <div
       role="alert"

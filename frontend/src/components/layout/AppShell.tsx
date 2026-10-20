@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { SimulatedBanner } from './SimulatedBanner'
+import { useScanStore } from '../../store/scanStore'
 
 interface NavItem {
   to: string
@@ -38,14 +39,16 @@ const navItems: NavItem[] = [
 ]
 
 export function AppShell() {
+  const { scanResult } = useScanStore()
+  const isLiveResult = scanResult !== null && scanResult.simulated === false
   return (
     <div className="min-h-screen flex flex-col bg-navy-950">
-      {/* Persistent simulated data banner — always visible, not dismissible */}
+      {/* Persistent mode-aware banner — always visible, not dismissible */}
       <SimulatedBanner />
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar navigation */}
-        <aside className="w-60 shrink-0 bg-navy-900 border-r border-navy-700 flex flex-col">
+        {/* Sidebar navigation — hidden on mobile, visible from md (768px) up */}
+        <aside className="hidden md:flex w-60 shrink-0 bg-navy-900 border-r border-navy-700 flex-col">
           {/* Logo */}
           <div className="px-5 py-5 border-b border-navy-700">
             <div className="flex items-center gap-2.5">
@@ -67,9 +70,7 @@ export function AppShell() {
               <NavLink
                 key={to}
                 to={to}
-                className={({ isActive }) =>
-                  `nav-link ${isActive ? 'active' : ''}`
-                }
+                className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
                 aria-label={label}
               >
                 {icon}
@@ -81,17 +82,48 @@ export function AppShell() {
           {/* Footer */}
           <div className="px-4 py-4 border-t border-navy-700">
             <div className="text-xs text-slate-600 leading-relaxed">
-              <div className="font-medium text-slate-500">Session 1 — Simulated Data</div>
-              <div className="mt-0.5">No real AWS API calls</div>
+              {isLiveResult ? (
+                <>
+                  <div className="font-medium text-green-500">Live AWS Mode</div>
+                  <div className="mt-0.5">Real AWS API data</div>
+                </>
+              ) : (
+                <>
+                  <div className="font-medium text-amber-500">Demo Mode</div>
+                  <div className="mt-0.5">Simulated data — no AWS calls</div>
+                </>
+              )}
             </div>
           </div>
         </aside>
 
-        {/* Main content */}
-        <main className="flex-1 overflow-auto" id="main-content">
+        {/* Main content — takes full width on mobile */}
+        <main className="flex-1 overflow-auto pb-16 md:pb-0" id="main-content">
           <Outlet />
         </main>
       </div>
+
+      {/* Mobile bottom navigation — visible below md breakpoint only */}
+      <nav
+        className="md:hidden fixed bottom-0 inset-x-0 bg-navy-900 border-t border-navy-700 flex z-50"
+        aria-label="Mobile navigation"
+      >
+        {navItems.map(({ to, label, icon }) => (
+          <NavLink
+            key={to}
+            to={to}
+            className={({ isActive }) =>
+              `flex flex-col items-center justify-center flex-1 py-2 text-xs gap-1 transition-colors focus-visible:ring-2 focus-visible:ring-aws-500 ${
+                isActive ? 'text-aws-500' : 'text-slate-500 hover:text-slate-300'
+              }`
+            }
+            aria-label={label}
+          >
+            {icon}
+            <span>{label}</span>
+          </NavLink>
+        ))}
+      </nav>
     </div>
   )
 }
