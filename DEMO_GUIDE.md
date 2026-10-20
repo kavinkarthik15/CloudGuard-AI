@@ -1,162 +1,286 @@
 # CloudGuard AI — Jury Demonstration Guide
 
-This guide gives exact, copy-pasteable commands and a step-by-step sequence for demonstrating CloudGuard AI to a competition jury.
+**Version:** Competition MVP v1  
+**Duration:** 5–7 minutes  
+**Audience:** AWS competition jury
 
 ---
 
-## Startup Commands
+## Quick Reference
 
-Open **two** terminal windows side-by-side.
+| Item | Value |
+|---|---|
+| Backend URL | http://127.0.0.1:8001 |
+| Frontend URL | http://localhost:5173 |
+| Backend startup | `python -m uvicorn main:app --host 127.0.0.1 --port 8001 --reload` |
+| Frontend startup | `npm run dev` |
+| Health check | http://127.0.0.1:8001/api/health |
+
+---
+
+## Pre-Demo Startup
+
+Open **two** separate terminal windows side by side before the jury arrives.
 
 ### Terminal 1 — Backend
 
 ```cmd
 cd /d "D:\CloudGuard AI\backend"
-.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8001 --reload
+.venv\Scripts\activate
+python -m uvicorn main:app --host 127.0.0.1 --port 8001 --reload
 ```
 
-Wait until you see:
+Wait until the terminal shows:
+
 ```
 INFO:     Application startup complete.
-INFO:     Uvicorn running on http://127.0.0.1:8001
+INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
 ```
 
-### Terminal 2 — Frontend (Development Server)
+Verify the backend is healthy by visiting http://127.0.0.1:8001/api/health in a browser.
+Expected response: `{"status":"ok","version":"2.0.0","default_mode":"demo","live_mode_available":true}`
+
+### Terminal 2 — Frontend
 
 ```cmd
 cd /d "D:\CloudGuard AI\frontend"
 npm run dev
 ```
 
-Wait until you see:
+Wait until the terminal shows:
+
 ```
   VITE vX.X.X  ready in XXX ms
   ➜  Local:   http://localhost:5173/
 ```
 
-Open a browser and go to: **http://localhost:5173**
+Open a browser and navigate to **http://localhost:5173**
+
+### AWS SSO Login (Live Mode only)
+
+If you plan to demonstrate Live AWS Mode, log in before the presentation:
+
+```cmd
+aws sso login --profile <your-profile-name>
+```
+
+Verify credentials are valid:
+
+```cmd
+aws sts get-caller-identity --profile <your-profile-name>
+```
 
 ---
 
-## Demo Sequence
+## Demonstration Script
 
-### Step 1 — Landing (Demo Mode, automatic)
-
-**What happens:** The app redirects to `/dashboard` and automatically triggers a Demo Mode scan using simulated fixture data. No AWS credentials are needed.
-
-**What to show:**
-- The amber **"Demo Mode — Simulated Data"** banner at the top — explain this is the demo/safe mode.
-- The stats panel showing finding counts by severity (Critical, High, Medium, Low, Informational).
-- The severity distribution chart.
-- The "Recent Findings" panel on the right.
+### Segment 1 — Problem Statement (30 seconds)
 
 **What to say:**
-> "CloudGuard AI is an AWS Security Misconfiguration Auditor. In Demo Mode it analyses a set of realistic but simulated AWS configurations — no real AWS account is needed. The application automatically detected misconfigurations across S3 buckets and EC2 security groups."
+> "Cloud misconfigurations are the leading cause of AWS data breaches — publicly accessible S3 buckets and overly permissive security groups routinely expose sensitive data. Manual security reviews don't scale. CloudGuard AI automates the detection of these misconfigurations, giving engineers instant, actionable findings with severity ratings and remediation steps."
+
+**Key point:** The problem is real, well-documented, and costs organisations millions.
 
 ---
 
-### Step 2 — Findings Page
-
-Navigate to **Findings** in the sidebar.
-
-**What to show:**
-- The total finding count in the subtitle.
-- The severity filter — select "Critical" only to isolate the worst issues.
-- Click on any finding row to expand it.
+### Segment 2 — Architecture Overview (60 seconds)
 
 **What to say:**
-> "Each finding shows the resource ID, severity, a plain-language title, the exact configuration evidence that triggered the rule, the risk explanation, and a step-by-step remediation guide."
+> "CloudGuard AI has three layers. The backend is a FastAPI service running on Python. It has a provider abstraction layer — today we support a Simulated provider and a live Boto3 provider, and the interface makes it straightforward to add others. On top of that sits the rules engine, which evaluates each resource against security rules independently of how the data arrived. The frontend is a React application that connects to the backend over a local REST API."
 
-**Expanded finding details to highlight:**
-- **Evidence** — the exact JSON values from the resource config (e.g. `block_public_acls: false`, `acl_grants: AllUsers READ`).
-- **Risk Explanation** — explains why this is dangerous.
-- **Remediation** — tells the engineer exactly what to fix.
+**Architecture at a glance:**
+
+```
+React Frontend (Vite, port 5173)
+        │  REST API (JSON)
+        ▼
+FastAPI Backend (port 8001, bound to 127.0.0.1)
+        │
+   ┌────┴────┐
+   │         │
+Simulated  Boto3 (AWS SDK)
+Provider   Provider
+   │         │
+fixture    Real AWS APIs
+  data      (read-only)
+        │
+   Rules Engine
+   ├── S3 Security Rules
+   └── EC2 Security Group Rules
+```
+
+**Key design decisions to mention:**
+- Backend binds to `127.0.0.1` only — not exposed to the network.
+- Provider abstraction keeps the rules engine cloud-agnostic.
+- Credentials are never logged, stored, or returned in API responses.
 
 ---
 
-### Step 3 — Export
+### Segment 3 — Demo Mode Walkthrough (90 seconds)
 
-On the Findings page, click the **Export Report** button (top right).
+> ⚠️ **IMPORTANT: Demo Mode findings are SIMULATED data generated by `providers/simulated.py`. They do NOT represent real AWS vulnerabilities.**
+
+The app opens directly in Demo Mode. No AWS credentials are needed.
+
+**Step 3a — Dashboard**
+
+Navigate to the Dashboard (home page).
 
 **What to show:**
-- Click "Download JSON" — a JSON file downloads immediately.
-- Click "Export Report" again → "Download CSV" — a CSV file downloads.
+1. The amber **"Demo Mode — Simulated Data"** banner — point this out explicitly to the jury.
+2. The severity stats panel: Critical, High, Medium, Low, Informational counts.
+3. The severity distribution chart.
+4. The "Recent Findings" list on the right side.
 
 **What to say:**
-> "Findings can be exported as JSON for programmatic ingestion or CSV for sharing with management. Each export is keyed to the specific scan — if the scan expires the user gets a clear error rather than stale data."
+> "Demo Mode runs immediately with no AWS account required. The amber banner makes it unambiguous that these are simulated findings — not real vulnerabilities. The dashboard gives an instant summary of the security posture across severity levels."
 
-Open the downloaded CSV in a text editor or Excel to show headers and rows.
+**Step 3b — Findings Page**
+
+Click **Findings** in the sidebar.
+
+**What to show:**
+1. Total finding count in the subtitle.
+2. Use the severity filter — select "Critical" to isolate the most severe issues.
+3. Click any finding row to expand it.
+
+**Expanded finding — highlight each field:**
+- **Resource** — which S3 bucket or EC2 security group triggered the rule.
+- **Severity** — Critical / High / Medium / Low / Informational.
+- **Evidence** — the exact configuration values that matched the rule (e.g. `block_public_acls: false`, `acl_grants: AllUsers READ`).
+- **Risk Explanation** — why this configuration is dangerous.
+- **Remediation** — the exact fix the engineer should apply.
+
+**What to say:**
+> "Every finding is self-contained: it tells you what resource is affected, why it's a problem, and precisely what to change. No hunting through documentation."
 
 ---
 
-### Step 4 — Scan Page & Live AWS Mode (if credentials available)
+### Segment 4 — Live AWS Mode (90 seconds)
 
 Navigate to **Scan** in the sidebar.
 
-**What to show (Demo Mode path, always works):**
+**Step 4a — Mode selection**
 
-1. The mode selector shows "⬡ Demo Mode" and "⬡ Live AWS" tabs.
-2. Demo Mode tab is selected by default, showing the amber info box.
-3. Click **Run Scan** — the scan runs against fixture data, shows a completion card.
+**What to show:**
+1. The mode selector tabs: **Demo Mode** and **Live AWS**.
+2. Click the **Live AWS** tab.
+
+**Step 4b — Identity Verification**
+
+1. Select your AWS CLI profile from the dropdown (e.g. `default`).
+2. Select the region (e.g. `eu-north-1`).
+3. Click **Verify AWS Identity**.
+
+The app calls `sts:GetCallerIdentity` and displays:
+- AWS Account ID
+- Caller ARN (IAM role or user)
+- Region
 
 **What to say:**
-> "Demo Mode runs instantly with no AWS account — perfect for evaluating the tool. For a real audit, switch to Live AWS mode."
+> "Before any scan, CloudGuard AI verifies identity. This catches expired credentials early and confirms we're scanning the intended account — not some misconfigured profile."
 
-**What to show (Live Mode, only if AWS credentials are configured):**
+**Step 4c — Live Scan**
 
-1. Click the **⬡ Live AWS** tab.
-2. The profile selector appears — select or type your AWS CLI profile (e.g. `default`).
-3. Set the region (e.g. `eu-north-1`).
-4. Click **Verify AWS Identity** — the app calls `sts:GetCallerIdentity` and displays your account ID, role ARN, and region.
-5. Click **Run Scan** — the scan runs against real AWS resources (read-only).
+Click **Run Scan**.
+
+**What to show:**
+- The scan progress indicator.
+- The completion card showing scan ID, timestamp, account ID, and finding counts.
+- Navigate to Findings — the banner now shows **"Live Mode"** (not amber/simulated).
 
 **What to say:**
-> "In Live AWS mode, CloudGuard AI uses only read-only permissions — s3:List*, s3:Get*, ec2:Describe*, and sts:GetCallerIdentity. No resources are created or modified. The identity is verified before the scan starts to catch expired credentials early."
+> "This scan made real read-only calls to AWS — `s3:ListAllMyBuckets`, `s3:GetPublicAccessBlock`, `s3:GetBucketAcl`, `s3:GetBucketPolicyStatus`, and `ec2:DescribeSecurityGroups`. No resources were created, modified, or deleted."
+
+**Demo fallback:** If the AWS SSO session expires during the presentation, click the **Demo Mode** toggle immediately. Demo Mode requires no credentials and shows the full feature set with simulated data. Say: *"Let me show you the same workflow in Demo Mode — the behaviour is identical, only the data source changes."*
 
 ---
 
-### Step 5 — Zero Findings (Explain what it means)
+### Segment 5 — Findings Detail (60 seconds)
 
-If a Live scan returns zero findings:
+With findings visible (Demo or Live), walk through one finding in full detail.
 
-The dashboard shows:
-> "No findings detected in this live scan. This means no misconfigurations matching the current rules were found — it does not guarantee a fully secure configuration."
+**S3 example to highlight:**
+- A bucket with Public Access Block partially or fully disabled.
+- Evidence shows which specific block settings are `false`.
+- Remediation: enable all four Public Access Block settings via console or CLI.
+
+**EC2 example to highlight:**
+- A security group with port 22 (SSH) open to `0.0.0.0/0`.
+- Evidence shows the inbound rule: `protocol: tcp, from_port: 22, cidr: 0.0.0.0/0`.
+- Remediation: restrict the CIDR to a known IP range or use AWS Systems Manager Session Manager.
 
 **What to say:**
-> "Zero findings is meaningful but not a security guarantee. It means none of the rules we implemented fired. CloudGuard AI is transparent about that."
+> "The evidence field contains the actual configuration values pulled from AWS — not a paraphrase. This is what makes remediation unambiguous. Engineers don't need to re-investigate; they can act directly on this output."
+
+**Zero findings explanation:** If a live scan returns zero findings, the UI displays: *"No findings detected in this live scan."* This means no misconfigurations matching the current ruleset were found — it is a correct result for a well-configured account, not a bug or error.
 
 ---
 
-### Step 6 — Detection Rules (brief technical summary)
+### Segment 6 — Export (30 seconds)
 
-**S3 Rules detected:**
-| Severity | Rule |
-|---|---|
-| Critical | Public ACL (AllUsers/AuthenticatedUsers) + blocks disabled |
-| High | Partial public access block (any setting disabled) |
-| High | No default encryption configured |
-| Medium | AuthenticatedUsers ACL with all blocks on |
-| Low | Versioning disabled |
-| Informational | SSE-S3 only (KMS recommended) |
-| Informational | Access logging disabled |
+On the Findings page, click **Export Report** (top right).
 
-**EC2 Security Group Rules detected:**
-| Severity | Rule |
-|---|---|
-| Critical | World-open SSH (port 22), RDP (3389), MySQL (3306), PostgreSQL (5432), MSSQL (1433), MongoDB (27017) |
-| Critical | All-ports open (protocol -1 or 0–65535) |
-| High | World-open non-standard port |
-| Informational | World-open HTTP (80) or HTTPS (443) |
+**What to show:**
+1. Click **Download JSON** — a JSON file downloads immediately.
+2. Click **Export Report** → **Download CSV** — a CSV file downloads.
+3. Open the CSV briefly to show headers and rows.
+
+**What to say:**
+> "Exports are keyed to a specific scan ID. If the backend restarts and the scan expires, the export returns a clear error rather than serving stale or mismatched data. JSON works for programmatic ingestion; CSV works for sharing with management or auditors."
 
 ---
 
-## Key Talking Points for Jury Q&A
+### Segment 7 — Wrap-up (30 seconds)
 
-- **No credentials hardcoded** — profile name comes from the request, credentials resolved by boto3 credential chain.
-- **Permission failures surface as errors** — `AccessDenied` on list operations is shown to the user, never silently treated as "all clear".
-- **Demo and Live mode are strictly separated** — the `simulated` flag on every finding and export reflects the actual data source.
-- **Export correctness** — each export is tied to a specific `scan_id`; a stale export returns `SCAN_NOT_FOUND` rather than serving wrong data.
-- **Read-only** — the tool calls only `List*`, `Describe*`, and `GetCallerIdentity` — no writes, creates, or deletes.
+**Current limitations to state honestly:**
+- Scans one AWS account and one region per run.
+- Rules cover S3 and EC2 security groups — IAM, CloudTrail, and other services are future work.
+- In-memory scan store: scans are lost if the backend restarts.
+- No persistent database in the current version.
+
+**Future roadmap:**
+- Multi-region scanning (provider abstraction already supports it).
+- Additional service coverage: IAM policies, CloudTrail, RDS, Lambda.
+- CI/CD integration: run scans as part of deployment pipelines.
+- Suppression lists to manage accepted risks and reduce noise.
+- Persistent scan history with a database backend.
+
+**What to say:**
+> "CloudGuard AI demonstrates that automated cloud security scanning can be lightweight, portable, and open-source. It runs locally or in CI/CD, requires only read-only permissions, and complements rather than replaces AWS-native tools like Security Hub."
+
+---
+
+## Jury Q&A — Prepared Answers
+
+**Q1: How do you handle false positives?**
+
+Rules use specific, deterministic conditions. For example, the SSH exposure rule fires only when port 22 is open to exactly `0.0.0.0/0` or `::/0` — not just any world-reachable range. The system also distinguishes between a resource being confirmed secure versus a resource where permissions prevented verification; an `AccessDenied` response surfaces as an explicit warning, never as a clean bill of health. Future work includes suppression lists so teams can mark known-acceptable configurations.
+
+**Q2: What AWS permissions does CloudGuard AI need?**
+
+Read-only permissions only:
+- `sts:GetCallerIdentity`
+- `s3:ListAllMyBuckets`
+- `s3:GetPublicAccessBlock`
+- `s3:GetBucketAcl`
+- `s3:GetBucketPolicyStatus`
+- `ec2:DescribeSecurityGroups`
+- `ec2:DescribeInstances`
+
+No write, create, delete, or IAM permissions are required or requested.
+
+**Q3: How does Demo Mode differ from Live Mode?**
+
+Demo Mode loads pre-defined fixture data from `providers/simulated.py` — it makes zero AWS API calls. Live Mode creates a real Boto3 session using the selected AWS CLI profile and calls AWS APIs directly. The UI clearly labels which mode produced each result: an amber "Simulated Data" banner in Demo Mode, a "Live Mode" label in Live Mode. The `simulated` flag is also present on every finding object and in every export file, so the distinction is preserved even after download.
+
+**Q4: Can this scale to multi-account or multi-region?**
+
+The current version scans one account and one region per scan invocation. The provider abstraction layer is designed so that adding multi-region iteration requires changes only to the scan orchestration layer — the rules engine and the API contract are unchanged. Multi-account support would follow a similar pattern, using assumed-role credentials per account.
+
+**Q5: How does this compare to AWS Security Hub or Trusted Advisor?**
+
+CloudGuard AI is lightweight, portable, and open-source. It runs on a developer's laptop or in a CI/CD pipeline without requiring AWS Security Hub to be enabled (which has a cost) or Trusted Advisor's Business/Enterprise support tier. It is transparent — you can read every rule — and it is extensible without going through AWS. The goal is to complement, not replace, AWS-native tools: use CloudGuard AI for shift-left detection during development, and Security Hub for production-scale continuous monitoring.
 
 ---
 
@@ -164,8 +288,26 @@ The dashboard shows:
 
 | Issue | Fix |
 |---|---|
-| Backend returns "could not connect" | Check Terminal 1 — uvicorn must show "Application startup complete." |
+| Backend "could not connect" | Check Terminal 1 — uvicorn must show "Application startup complete." at port 8001 |
 | Frontend blank page | Check Terminal 2 — vite dev server must be running at :5173 |
-| Port conflict on 8001 | Change `--port 8001` to `--port 8002` and update `frontend/.env.local` to match |
-| Live AWS: "credentials expired" | Run `aws sso login --profile <name>` in a terminal |
-| Live AWS: "profile not found" | Run `aws configure list-profiles` to see configured profiles |
+| Port conflict on 8001 | Change `--port 8001` to `--port 8002` and update `frontend/.env.local`: `VITE_API_BASE_URL=http://127.0.0.1:8002` |
+| Live AWS: "credentials expired" | Run `aws sso login --profile <name>` in a third terminal |
+| Live AWS: "profile not found" | Run `aws configure list-profiles` to see available profiles |
+| Live AWS: "AccessDenied" | The IAM role lacks one or more required read-only permissions — see Q2 above |
+| Export: "SCAN_NOT_FOUND" | Backend was restarted; re-run the scan and export immediately |
+| `start_backend.bat` fails | Do not use `start_backend.bat` — it uses the wrong port (8000). Use the uvicorn command above |
+
+---
+
+## Distinction: Simulated vs Real AWS Results
+
+| Attribute | Demo Mode | Live AWS Mode |
+|---|---|---|
+| Data source | `providers/simulated.py` fixture | Real AWS APIs via Boto3 |
+| AWS credentials required | No | Yes |
+| Findings represent real vulnerabilities | **No** | Yes (in the scanned account) |
+| UI label | Amber "Simulated Data" banner | "Live Mode" label |
+| `simulated` field in export | `true` | `false` |
+| `sts:GetCallerIdentity` called | No | Yes, before scan starts |
+
+> No mocked or simulated findings should ever be presented to the jury as real AWS vulnerabilities. The amber banner and `simulated` flags are the authoritative indicators.
