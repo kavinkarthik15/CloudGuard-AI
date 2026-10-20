@@ -71,6 +71,7 @@ _CREDENTIAL_ERROR_CODES = frozenset({
     "TokenRefreshRequired",
     "InvalidClientTokenId",
     "AuthFailure",
+    "TokenRetrievalError",  # SSO token cache miss — treat as session expired
 })
 
 # ACL grantee URIs that indicate public/authenticated-user access
@@ -316,6 +317,27 @@ class CredentialError(Exception):
     """Raised when AWS credentials are missing, expired, or invalid."""
 
 
+class SessionExpiredError(CredentialError):
+    """AWS SSO/token session has expired. User must run aws sso login."""
+
+
+class MissingCredentialsError(CredentialError):
+    """Profile not found or no credentials configured at all."""
+
+
+class InvalidProfileError(CredentialError):
+    """Profile name is syntactically invalid or contains unsafe characters.
+
+    Raised when _validate_profile_name() rejects the supplied name — before
+    any AWS API call is made. Distinct from MissingCredentialsError, which
+    means the profile is well-formed but not configured or lacks credentials.
+    """
+
+
+class NetworkError(Exception):
+    """Cannot reach the AWS endpoint — connectivity or DNS failure."""
+
+
 class InsufficientPermissionsError(Exception):
     """Raised when the identity lacks permission for a required list operation."""
 
@@ -372,7 +394,7 @@ class Boto3ScannerProvider:
         try:
             _validate_profile_name(profile_name)
         except ValueError as exc:
-            raise CredentialError(
+            raise InvalidProfileError(
                 f"Invalid AWS profile name: {exc}"
             ) from exc
 
@@ -381,17 +403,23 @@ class Boto3ScannerProvider:
             # Eagerly validate credentials exist (does NOT call AWS yet)
             creds = session.get_credentials()
             if creds is None:
-                raise CredentialError(
+                raise MissingCredentialsError(
                     f"No credentials found for AWS profile '{profile_name}'. "
-                    f"Run 'aws sso login --profile {profile_name}' to authenticate, "
-                    f"or check that the profile is configured in ~/.aws/config."
+                    f"Run 'aws configure --profile {profile_name}' to configure, "
+                    f"or 'aws sso login --profile {profile_name}' to authenticate."
                 )
             return session
         except botocore.exceptions.ProfileNotFound:
-            raise CredentialError(
+            raise MissingCredentialsError(
                 f"AWS profile '{profile_name}' not found in ~/.aws/config. "
-                f"Ensure the profile is configured. "
-                f"Run 'aws sso login --profile {profile_name}' if it is an SSO profile."
+                f"Run 'aws configure --profile {profile_name}' to set up, "
+                f"or 'aws sso login --profile {profile_name}' if it is an SSO profile."
+            )
+        except botocore.exceptions.NoCredentialsError:
+            raise MissingCredentialsError(
+                f"No credentials found for AWS profile '{profile_name}'. "
+                f"Run 'aws configure --profile {profile_name}' to configure, "
+                f"or 'aws sso login --profile {profile_name}' if this is an SSO profile."
             )
 
     def get_caller_identity(self) -> dict[str, str]:
@@ -412,7 +440,7 @@ class Boto3ScannerProvider:
         except botocore.exceptions.ClientError as exc:
             code = exc.response["Error"]["Code"]
             if code in _CREDENTIAL_ERROR_CODES:
-                raise CredentialError(
+                raise SessionExpiredError(
                     f"AWS credentials for profile '{self._profile_name}' are expired "
                     f"or invalid ({code}). Run 'aws sso login --profile "
                     f"{self._profile_name}' if this is an SSO profile."
@@ -426,13 +454,30 @@ class Boto3ScannerProvider:
                 f"STS identity check failed ({code}): {exc.response['Error']['Message']}"
             ) from exc
         except botocore.exceptions.NoCredentialsError:
-            raise CredentialError(
+            raise MissingCredentialsError(
                 f"No valid credentials for profile '{self._profile_name}'. "
-                f"Run 'aws sso login --profile {self._profile_name}' if this is an SSO profile, "
-                f"or check that credentials are configured for this profile."
+                f"Run 'aws configure --profile {self._profile_name}' to configure, "
+                f"or 'aws sso login --profile {self._profile_name}' if this is an SSO profile."
             )
+        except botocore.exceptions.PartialCredentialsError as exc:
+            raise MissingCredentialsError(
+                f"Incomplete credentials for profile '{self._profile_name}': {exc}. "
+                f"Run 'aws configure --profile {self._profile_name}' to provide all required values."
+            ) from exc
+        except (
+            botocore.exceptions.TokenRetrievalError,
+            botocore.exceptions.UnauthorizedSSOTokenError,
+            botocore.exceptions.SSOTokenLoadError,
+            botocore.exceptions.CredentialRetrievalError,
+            botocore.exceptions.RefreshWithMFAUnsupportedError,
+        ) as exc:
+            raise SessionExpiredError(
+                f"AWS credentials for profile '{self._profile_name}' could not be retrieved "
+                f"or have expired ({type(exc).__name__}). "
+                f"Run 'aws sso login --profile {self._profile_name}' if this is an SSO profile."
+            ) from exc
         except botocore.exceptions.BotoCoreError as exc:
-            raise CredentialError(f"AWS connection error during identity check: {exc}") from exc
+            raise NetworkError(f"Could not reach AWS during identity check: {exc}") from exc
 
     # ------------------------------------------------------------------
     # ScannerProvider interface — S3
@@ -454,7 +499,7 @@ class Boto3ScannerProvider:
         except botocore.exceptions.ClientError as exc:
             code = exc.response["Error"]["Code"]
             if code in _CREDENTIAL_ERROR_CODES:
-                raise CredentialError(
+                raise SessionExpiredError(
                     f"Credentials expired ({code}). Run 'aws sso login --profile "
                     f"{self._profile_name}' if this is an SSO profile."
                 ) from exc
@@ -729,7 +774,7 @@ class Boto3ScannerProvider:
         except botocore.exceptions.ClientError as exc:
             code = exc.response["Error"]["Code"]
             if code in _CREDENTIAL_ERROR_CODES:
-                raise CredentialError(
+                raise SessionExpiredError(
                     f"Credentials expired ({code}). Run 'aws sso login --profile "
                     f"{self._profile_name}' if this is an SSO profile."
                 ) from exc

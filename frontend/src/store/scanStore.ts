@@ -46,6 +46,12 @@ interface ScanState {
   identityStatus: IdentityStatus
   identityInfo: IdentityInfo | null
   identityError: string | null
+  /**
+   * The structured error code from the backend (SESSION_EXPIRED, NO_CREDENTIALS,
+   * NETWORK_ERROR, INSUFFICIENT_PERMISSIONS, etc.).
+   * null when identityStatus is not 'error' or error came from a non-API source.
+   */
+  identityErrorCode: string | null
 
   /**
    * The (profile, region) pair that was successfully verified.
@@ -110,6 +116,7 @@ export const useScanStore = create<ScanState & ScanActions>((set, get) => ({
   identityStatus: 'idle',
   identityInfo: null,
   identityError: null,
+  identityErrorCode: null,
   verifiedFor: null,
 
   // Live config
@@ -120,40 +127,64 @@ export const useScanStore = create<ScanState & ScanActions>((set, get) => ({
     const current = get().selectedMode
     if (mode === current) return
     // Clear scan results when switching modes to prevent stale provenance display
+    // Demo Mode: clear all live-scan state. Never call /api/identity in demo mode.
     set({
       selectedMode: mode,
       scanResult: null,
       status: 'idle',
       error: null,
       lastScanAt: null,
-      // Reset identity when leaving live mode
+      // Reset identity when leaving live mode (or entering demo)
       ...(mode === 'demo'
-        ? { identityStatus: 'idle', identityInfo: null, identityError: null, verifiedFor: null }
+        ? {
+            identityStatus: 'idle',
+            identityInfo: null,
+            identityError: null,
+            identityErrorCode: null,
+            verifiedFor: null,
+          }
         : {}),
     })
   },
 
   setAwsRegion: (region) => {
-    const { verifiedFor } = get()
-    // If identity was verified for a different region, clear it
-    const shouldClearIdentity = verifiedFor !== null && verifiedFor.region !== region
+    const { awsRegion } = get()
+    if (region === awsRegion) return
+    // Region change invalidates identity (verified for old region) and scan results
+    // (EC2 findings are region-specific)
     set({
       awsRegion: region,
-      ...(shouldClearIdentity
-        ? { identityStatus: 'idle', identityInfo: null, identityError: null, verifiedFor: null }
-        : {}),
+      identityStatus: 'idle',
+      identityInfo: null,
+      identityError: null,
+      identityErrorCode: null,
+      verifiedFor: null,
+      // Scan results are region-specific — clear them on region change
+      scanResult: null,
+      status: 'idle',
+      error: null,
+      lastScanAt: null,
     })
   },
 
   setAwsProfile: (profile) => {
-    const { verifiedFor } = get()
-    // If identity was verified for a different profile, clear it
-    const shouldClearIdentity = verifiedFor !== null && verifiedFor.profile !== profile
+    const { awsProfile } = get()
+    if (profile === awsProfile) return
+    // Profile change always clears identity state — regardless of whether verifiedFor
+    // is set. This handles the case where identityStatus is 'error' and verifiedFor
+    // is null: the error belongs to the old profile and must not persist.
+    // Also clear scan results — they belong to the old profile's session.
     set({
       awsProfile: profile,
-      ...(shouldClearIdentity
-        ? { identityStatus: 'idle', identityInfo: null, identityError: null, verifiedFor: null }
-        : {}),
+      identityStatus: 'idle',
+      identityInfo: null,
+      identityError: null,
+      identityErrorCode: null,
+      verifiedFor: null,
+      scanResult: null,
+      status: 'idle',
+      error: null,
+      lastScanAt: null,
     })
   },
 
@@ -223,16 +254,32 @@ export const useScanStore = create<ScanState & ScanActions>((set, get) => ({
 
   checkIdentity: async () => {
     const { awsProfile, awsRegion } = get()
-    set({ identityStatus: 'checking', identityError: null, identityInfo: null, verifiedFor: null })
+    // Capture profile and region at call start for stale-response detection
+    const profileAtStart = awsProfile
+    const regionAtStart = awsRegion
+
+    set({ identityStatus: 'checking', identityError: null, identityErrorCode: null, identityInfo: null, verifiedFor: null })
     try {
       const info = await scanApi.checkIdentity(awsProfile, awsRegion)
+      // Stale-response guard: discard result if profile/region changed while in flight
+      const current = get()
+      if (current.awsProfile !== profileAtStart || current.awsRegion !== regionAtStart) {
+        return
+      }
       set({
         identityStatus: 'verified',
         identityInfo: info,
         identityError: null,
-        verifiedFor: { profile: awsProfile, region: awsRegion },
+        identityErrorCode: null,
+        verifiedFor: { profile: profileAtStart, region: regionAtStart },
       })
     } catch (err) {
+      // Stale-response guard: discard error if profile/region changed while in flight
+      const current = get()
+      if (current.awsProfile !== profileAtStart || current.awsRegion !== regionAtStart) {
+        return
+      }
+      const errorCode = err instanceof ApiError ? err.code : null
       const message =
         err instanceof ApiError
           ? err.message
@@ -240,6 +287,7 @@ export const useScanStore = create<ScanState & ScanActions>((set, get) => ({
       set({
         identityStatus: 'error',
         identityError: message,
+        identityErrorCode: errorCode,
         identityInfo: null,
         verifiedFor: null,
       })
@@ -251,6 +299,7 @@ export const useScanStore = create<ScanState & ScanActions>((set, get) => ({
       identityStatus: 'idle',
       identityInfo: null,
       identityError: null,
+      identityErrorCode: null,
       verifiedFor: null,
     }),
 
@@ -295,12 +344,14 @@ export const useScanStore = create<ScanState & ScanActions>((set, get) => ({
       // If the live scan fails with an auth error, clear the identity so the
       // user knows they need to re-verify before scanning again
       if (selectedMode === 'live' && err instanceof ApiError &&
-          (err.code === 'INVALID_CREDENTIALS' || err.code === 'INSUFFICIENT_PERMISSIONS')) {
+          (err.code === 'INVALID_CREDENTIALS' || err.code === 'INSUFFICIENT_PERMISSIONS' ||
+           err.code === 'SESSION_EXPIRED' || err.code === 'NO_CREDENTIALS')) {
         set({
           status: 'error',
           error: message,
           identityStatus: 'error',
           identityError: message,
+          identityErrorCode: err.code,
           verifiedFor: null,
         })
       } else {

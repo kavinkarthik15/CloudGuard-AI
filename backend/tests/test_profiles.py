@@ -262,19 +262,23 @@ def test_get_profiles_does_not_expose_file_paths(client):
 # ---------------------------------------------------------------------------
 
 def test_identity_endpoint_rejects_traversal_profile(client):
-    """GET /api/identity with a path-traversal profile name returns 401."""
+    """GET /api/identity with a path-traversal profile name returns 400 INVALID_PROFILE.
+
+    Malformed or unsafe profile names are rejected before an AWS session is created.
+    This is deliberately distinct from NO_CREDENTIALS (profile well-formed but not
+    configured) and SESSION_EXPIRED (profile found but SSO session is stale).
+    """
     r = client.get("/api/identity?profile=../etc/passwd&region=us-east-1")
-    assert r.status_code in (401, 422)
-    if r.status_code == 401:
-        data = r.json()
-        assert data["code"] == "INVALID_CREDENTIALS"
+    assert r.status_code == 400
+    data = r.json()
+    assert data["code"] == "INVALID_PROFILE"
 
 
 def test_identity_endpoint_rejects_shell_injection_profile(client):
-    """GET /api/identity with a shell injection profile returns 401."""
-    r = client.get("/api/identity?profile=default;rm+-rf+/&region=us-east-1")
-    # URL-encoded ; may arrive decoded — either 401 or 422 is acceptable
-    assert r.status_code in (401, 422)
+    """GET /api/identity with a shell injection profile returns 400 INVALID_PROFILE."""
+    r = client.get("/api/identity", params={"profile": "; rm -rf /", "region": "us-east-1"})
+    assert r.status_code == 400
+    assert r.json()["code"] == "INVALID_PROFILE"
 
 
 # ---------------------------------------------------------------------------

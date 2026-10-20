@@ -200,7 +200,7 @@ function ProfileSelector() {
 
 function IdentityVerificationPanel() {
   const {
-    identityStatus, identityInfo, identityError,
+    identityStatus, identityInfo, identityError, identityErrorCode,
     awsProfile,
     checkIdentity,
     status,
@@ -208,6 +208,77 @@ function IdentityVerificationPanel() {
   const isIdentityValid = selectIsIdentityCurrentlyValid(useScanStore.getState())
 
   const isBusy = status === 'scanning' || identityStatus === 'checking'
+
+  // Render an actionable error message based on the structured error code
+  function renderIdentityError() {
+    if (!identityError) return null
+    const codeStyle = 'font-mono text-xs bg-navy-900/50 rounded px-1 py-0.5'
+    switch (identityErrorCode) {
+      case 'SESSION_EXPIRED':
+        return (
+          <>
+            <p className="text-sm font-semibold text-red-300">Authentication Failed — SSO Session Expired</p>
+            <p className="mt-1 text-sm text-red-400/80">Your AWS SSO session has expired.</p>
+            <p className="mt-2 text-xs text-red-400/60">
+              Run <code className={codeStyle}>aws sso login --profile {awsProfile}</code> then try again.
+            </p>
+          </>
+        )
+      case 'NO_CREDENTIALS':
+        return (
+          <>
+            <p className="text-sm font-semibold text-red-300">No Credentials Found</p>
+            <p className="mt-1 text-sm text-red-400/80">
+              Profile <code className={codeStyle}>{awsProfile}</code> has no credentials configured.
+            </p>
+            <p className="mt-2 text-xs text-red-400/60">
+              Run <code className={codeStyle}>aws configure --profile {awsProfile}</code> or{' '}
+              <code className={codeStyle}>aws sso login --profile {awsProfile}</code> then try again.
+            </p>
+          </>
+        )
+      case 'NETWORK_ERROR':
+        return (
+          <>
+            <p className="text-sm font-semibold text-red-300">Cannot Reach AWS</p>
+            <p className="mt-1 text-sm text-red-400/80">
+              Could not connect to AWS. Check your internet connection and try again.
+            </p>
+          </>
+        )
+      case 'INVALID_PROFILE':
+        return (
+          <>
+            <p className="text-sm font-semibold text-red-300">Invalid Profile Name</p>
+            <p className="mt-1 text-sm text-red-400/80">
+              Profile <code className={codeStyle}>{awsProfile}</code> contains invalid characters
+              and cannot be used. Select a valid AWS CLI profile from the dropdown.
+            </p>
+          </>
+        )
+      case 'INSUFFICIENT_PERMISSIONS':
+        return (
+          <>
+            <p className="text-sm font-semibold text-red-300">Permission Denied</p>
+            <p className="mt-1 text-sm text-red-400/80">
+              Profile <code className={codeStyle}>{awsProfile}</code> does not have{' '}
+              <code className={codeStyle}>sts:GetCallerIdentity</code> permission. Check IAM permissions.
+            </p>
+          </>
+        )
+      default:
+        // Forward-compatible fallback for any future error codes
+        return (
+          <>
+            <p className="text-sm font-semibold text-red-300">Authentication Failed</p>
+            <p className="mt-1 text-sm text-red-400/80">{identityError}</p>
+            <p className="mt-2 text-xs text-red-400/60">
+              Run <code className={codeStyle}>aws sso login --profile {awsProfile}</code> then try again.
+            </p>
+          </>
+        )
+    }
+  }
 
   return (
     <div className="space-y-3">
@@ -235,7 +306,7 @@ function IdentityVerificationPanel() {
         </button>
       )}
 
-      {/* Identity error */}
+      {/* Identity error — rendered with per-code actionable messages */}
       {identityStatus === 'error' && identityError && (
         <div className="rounded-lg border border-red-500/30 bg-red-950/20 p-4">
           <div className="flex items-start gap-3">
@@ -243,11 +314,7 @@ function IdentityVerificationPanel() {
               <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" clipRule="evenodd" />
             </svg>
             <div>
-              <p className="text-sm font-semibold text-red-300">Authentication Failed</p>
-              <p className="mt-1 text-sm text-red-400/80">{identityError}</p>
-              <p className="mt-2 text-xs text-red-400/60">
-                Run <code className="font-mono">aws sso login --profile {awsProfile}</code> then try again.
-              </p>
+              {renderIdentityError()}
             </div>
           </div>
         </div>

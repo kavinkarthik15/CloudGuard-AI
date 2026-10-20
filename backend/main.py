@@ -286,7 +286,23 @@ async def get_identity(
 ):
     """Verify AWS credentials and return caller identity metadata.
     Never returns credential values.
+
+    Error codes returned:
+      SESSION_EXPIRED (401) — SSO/token session has expired
+      NO_CREDENTIALS  (401) — profile not found or no credentials configured
+      INSUFFICIENT_PERMISSIONS (403) — sts:GetCallerIdentity was denied
+      NETWORK_ERROR   (503) — cannot reach AWS endpoints
     """
+    import botocore.exceptions as _botocore_exc
+    from providers.boto3_provider import (
+        CredentialError,
+        InsufficientPermissionsError,
+        InvalidProfileError,
+        MissingCredentialsError,
+        NetworkError,
+        SessionExpiredError,
+    )
+
     resolved_profile = profile or DEFAULT_AWS_PROFILE
     resolved_region = region or DEFAULT_AWS_REGION
 
@@ -303,12 +319,84 @@ async def get_identity(
             region=resolved_region,
             profile=resolved_profile,
         )
-    except Exception as exc:
-        from providers.boto3_provider import CredentialError, InsufficientPermissionsError
-        if isinstance(exc, CredentialError):
-            return error_response(401, "INVALID_CREDENTIALS", str(exc))
-        if isinstance(exc, InsufficientPermissionsError):
-            return error_response(403, "INSUFFICIENT_PERMISSIONS", str(exc))
+    # ── CloudGuard domain exceptions (primary path) ──────────────────────
+    except InvalidProfileError as exc:
+        return error_response(
+            400, "INVALID_PROFILE",
+            f"Invalid profile name: {exc}",
+        )
+    except SessionExpiredError:
+        return error_response(
+            401, "SESSION_EXPIRED",
+            f"AWS SSO session expired. Run: aws sso login --profile {resolved_profile}",
+        )
+    except MissingCredentialsError:
+        return error_response(
+            401, "NO_CREDENTIALS",
+            f"No credentials found for profile '{resolved_profile}'. "
+            f"Run: aws configure --profile {resolved_profile}",
+        )
+    except InsufficientPermissionsError:
+        return error_response(
+            403, "INSUFFICIENT_PERMISSIONS",
+            f"sts:GetCallerIdentity was denied for profile '{resolved_profile}'. "
+            "Check IAM permissions.",
+        )
+    except NetworkError:
+        return error_response(
+            503, "NETWORK_ERROR",
+            "Could not reach AWS. Check internet connectivity and try again.",
+        )
+    except CredentialError as exc:
+        # Catch-all for any CredentialError sub-type not matched above
+        return error_response(401, "NO_CREDENTIALS", str(exc))
+    # ── Raw botocore exceptions (defence-in-depth) ────────────────────────
+    # Handles cases where botocore exceptions escape the provider boundary,
+    # e.g. in mocked tests or alternative provider implementations.
+    except (_botocore_exc.NoCredentialsError, _botocore_exc.PartialCredentialsError):
+        return error_response(
+            401, "NO_CREDENTIALS",
+            f"No credentials found for profile '{resolved_profile}'. "
+            f"Run: aws configure --profile {resolved_profile}",
+        )
+    except (
+        _botocore_exc.TokenRetrievalError,
+        _botocore_exc.UnauthorizedSSOTokenError,
+        _botocore_exc.SSOTokenLoadError,
+        _botocore_exc.RefreshWithMFAUnsupportedError,
+    ):
+        return error_response(
+            401, "SESSION_EXPIRED",
+            f"AWS SSO session expired. Run: aws sso login --profile {resolved_profile}",
+        )
+    except _botocore_exc.CredentialRetrievalError:
+        # CredentialRetrievalError covers both auth failures and IMDS connectivity
+        # issues. We surface SESSION_EXPIRED (re-auth) as it is the most common
+        # cause; genuine connectivity failures are caught by BotoCoreError below.
+        return error_response(
+            401, "SESSION_EXPIRED",
+            f"AWS credentials for profile '{resolved_profile}' could not be retrieved. "
+            f"Run: aws sso login --profile {resolved_profile}",
+        )
+    except _botocore_exc.ClientError as exc:
+        code = exc.response["Error"]["Code"]
+        if code in {"AccessDenied", "AccessDeniedException",
+                    "AuthorizationError", "UnauthorizedAccess"}:
+            return error_response(
+                403, "INSUFFICIENT_PERMISSIONS",
+                f"sts:GetCallerIdentity was denied for profile '{resolved_profile}'. "
+                "Check IAM permissions.",
+            )
+        return error_response(
+            401, "SESSION_EXPIRED",
+            f"AWS SSO session expired. Run: aws sso login --profile {resolved_profile}",
+        )
+    except _botocore_exc.BotoCoreError:
+        return error_response(
+            503, "NETWORK_ERROR",
+            "Could not reach AWS. Check internet connectivity and try again.",
+        )
+    except Exception:
         traceback.print_exc()
         return error_response(500, "INTERNAL_ERROR",
                               "Identity check failed. Check backend logs.")
@@ -345,7 +433,15 @@ async def _run_demo_scan(request: ScanRequest) -> ScanResult | JSONResponse:
 
 
 async def _run_live_scan(request: ScanRequest) -> ScanResult | JSONResponse:
-    from providers.boto3_provider import CredentialError, InsufficientPermissionsError
+    import botocore.exceptions as _botocore_exc
+    from providers.boto3_provider import (
+        CredentialError,
+        InsufficientPermissionsError,
+        InvalidProfileError,
+        MissingCredentialsError,
+        NetworkError,
+        SessionExpiredError,
+    )
 
     resolved_profile = request.aws_profile or DEFAULT_AWS_PROFILE
     resolved_region = request.region or DEFAULT_AWS_REGION
@@ -357,18 +453,65 @@ async def _run_live_scan(request: ScanRequest) -> ScanResult | JSONResponse:
     except ValueError as exc:
         return error_response(400, "INVALID_REGION", str(exc))
 
+    # --- Identity pre-check: must succeed before any scan work ---
     try:
         provider = get_boto3_provider(profile=resolved_profile, region=resolved_region)
         identity = provider.get_caller_identity()
-    except CredentialError as exc:
-        return error_response(401, "INVALID_CREDENTIALS", str(exc))
+    # ── CloudGuard domain exceptions (primary path) ──────────────────────
+    except InvalidProfileError as exc:
+        return error_response(
+            400, "INVALID_PROFILE",
+            f"Invalid profile name: {exc}",
+        )
+    except SessionExpiredError:
+        return error_response(
+            401, "SESSION_EXPIRED",
+            f"AWS SSO session expired. Run: aws sso login --profile {resolved_profile}",
+        )
+    except MissingCredentialsError:
+        return error_response(
+            401, "NO_CREDENTIALS",
+            f"No credentials found for profile '{resolved_profile}'. "
+            f"Run: aws configure --profile {resolved_profile}",
+        )
     except InsufficientPermissionsError as exc:
         return error_response(403, "INSUFFICIENT_PERMISSIONS", str(exc))
+    except NetworkError:
+        return error_response(
+            503, "NETWORK_ERROR",
+            "Could not reach AWS. Check internet connectivity and try again.",
+        )
+    except CredentialError as exc:
+        return error_response(401, "NO_CREDENTIALS", str(exc))
+    # ── Raw botocore exceptions (defence-in-depth) ────────────────────────
+    except (_botocore_exc.NoCredentialsError, _botocore_exc.PartialCredentialsError):
+        return error_response(
+            401, "NO_CREDENTIALS",
+            f"No credentials found for profile '{resolved_profile}'. "
+            f"Run: aws configure --profile {resolved_profile}",
+        )
+    except (
+        _botocore_exc.TokenRetrievalError,
+        _botocore_exc.UnauthorizedSSOTokenError,
+        _botocore_exc.SSOTokenLoadError,
+        _botocore_exc.RefreshWithMFAUnsupportedError,
+        _botocore_exc.CredentialRetrievalError,
+    ):
+        return error_response(
+            401, "SESSION_EXPIRED",
+            f"AWS SSO session expired. Run: aws sso login --profile {resolved_profile}",
+        )
+    except _botocore_exc.BotoCoreError:
+        return error_response(
+            503, "NETWORK_ERROR",
+            "Could not reach AWS. Check internet connectivity and try again.",
+        )
     except Exception:
         traceback.print_exc()
         return error_response(500, "INTERNAL_ERROR",
                               "Identity verification failed before scan could start.")
 
+    # --- Scan body ---
     try:
         scanner = Scanner(provider)
         result = scanner.run(
@@ -381,8 +524,42 @@ async def _run_live_scan(request: ScanRequest) -> ScanResult | JSONResponse:
         return result
     except InsufficientPermissionsError as exc:
         return error_response(403, "INSUFFICIENT_PERMISSIONS", str(exc))
+    except SessionExpiredError:
+        # Token can expire mid-scan for long-running scans
+        return error_response(
+            401, "SESSION_EXPIRED",
+            f"AWS SSO session expired during scan. Run: aws sso login --profile {resolved_profile}",
+        )
     except CredentialError as exc:
-        return error_response(401, "INVALID_CREDENTIALS", str(exc))
+        return error_response(401, "SESSION_EXPIRED", str(exc))
+    except NetworkError:
+        return error_response(
+            503, "NETWORK_ERROR",
+            "Lost connectivity to AWS during the scan. Check internet connectivity.",
+        )
+    # ── Raw botocore exceptions in scan body (defence-in-depth) ──────────
+    except (
+        _botocore_exc.TokenRetrievalError,
+        _botocore_exc.UnauthorizedSSOTokenError,
+        _botocore_exc.SSOTokenLoadError,
+        _botocore_exc.RefreshWithMFAUnsupportedError,
+        _botocore_exc.CredentialRetrievalError,
+    ):
+        return error_response(
+            401, "SESSION_EXPIRED",
+            f"AWS SSO session expired during scan. Run: aws sso login --profile {resolved_profile}",
+        )
+    except (_botocore_exc.NoCredentialsError, _botocore_exc.PartialCredentialsError):
+        return error_response(
+            401, "NO_CREDENTIALS",
+            f"No credentials found for profile '{resolved_profile}'. "
+            f"Run: aws configure --profile {resolved_profile}",
+        )
+    except _botocore_exc.BotoCoreError:
+        return error_response(
+            503, "NETWORK_ERROR",
+            "Lost connectivity to AWS during the scan. Check internet connectivity.",
+        )
     except Exception:
         traceback.print_exc()
         return error_response(500, "INTERNAL_ERROR",
