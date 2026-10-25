@@ -88,6 +88,15 @@ class EncryptionConfig(BaseModel):
     kms_key_id: Optional[str] = None
 
 
+class Warning(BaseModel):
+    """A resource that could not be fully scanned, with the reason.
+    Defined here (before S3BucketConfig) so S3BucketConfig.scan_warnings
+    can reference it without a forward reference.
+    """
+    resource_id: str
+    reason: str
+
+
 class S3BucketConfig(BaseModel):
     """S3 bucket configuration for security analysis.
     Used by both SimulatedScannerProvider (Session 1) and Boto3ScannerProvider (Session 2).
@@ -99,6 +108,13 @@ class S3BucketConfig(BaseModel):
     encryption: Optional[EncryptionConfig] = None
     versioning_enabled: Optional[bool] = None
     logging_enabled: Optional[bool] = None
+    # Phase 4D: actual AWS region of the bucket (null LocationConstraint = us-east-1)
+    region: str = "us-east-1"
+    # Phase 4D: per-bucket warnings from regional client work (e.g. AccessDenied on
+    # GetBucketLocation). Not a security finding — carries scan-quality metadata.
+    # Excluded from serialization to avoid polluting API responses directly;
+    # Scanner drains these and adds them to ScanResult.warnings.
+    scan_warnings: list[Warning] = Field(default_factory=list, exclude=True)
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +140,8 @@ class SecurityGroupConfig(BaseModel):
     description: str
     inbound_rules: list[InboundRule] = Field(default_factory=list)
     vpc_id: Optional[str] = None
+    # Phase 4E: the AWS region this security group belongs to
+    region: str = "us-east-1"
 
 
 # ---------------------------------------------------------------------------
@@ -143,10 +161,19 @@ class Finding(BaseModel):
     simulated: bool = True      # False for live AWS findings
 
 
-class Warning(BaseModel):
-    """A resource that could not be fully scanned, with the reason."""
-    resource_id: str
-    reason: str
+class ScanCoverage(BaseModel):
+    """Coverage metadata for Phase 4D/4E — what was requested vs actually scanned.
+
+    All fields are optional so existing clients that don't use coverage are unaffected.
+    """
+    # EC2 multi-region coverage
+    requested_regions: list[str] = Field(default_factory=list)
+    scanned_regions: list[str] = Field(default_factory=list)
+    failed_regions: list[str] = Field(default_factory=list)
+    # S3 coverage
+    s3_buckets_requested: int = 0
+    s3_buckets_scanned: int = 0
+    s3_buckets_failed: int = 0
 
 
 class ScanResult(BaseModel):
@@ -164,6 +191,8 @@ class ScanResult(BaseModel):
     # Never populated with raw credentials or session tokens.
     aws_account_id: Optional[str] = None
     aws_identity_arn: Optional[str] = None
+    # Phase 4D/4E: scan coverage metadata (optional — backward compatible)
+    coverage: Optional[ScanCoverage] = None
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +215,10 @@ class ScanMode(str, Enum):
 class ScanRequest(BaseModel):
     """Request body for POST /api/scan."""
     region: str = "us-east-1"
+    # Phase 4E: optional multi-region list. When supplied, all entries are scanned.
+    # Single-region mode (backward compat): omit 'regions' and use 'region'.
+    # All-enabled mode: set regions=["ALL_ENABLED"].
+    regions: Optional[list[str]] = None
     mode: ScanMode = ScanMode.demo
     aws_profile: Optional[str] = None
     # Optional profile override for live mode. Defaults to AWS_PROFILE env var

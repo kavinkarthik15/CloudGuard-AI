@@ -143,6 +143,16 @@ export interface Warning {
   reason: string
 }
 
+/** Phase 4D/4E: scan coverage metadata. All fields optional for backward compat. */
+export interface ScanCoverage {
+  requested_regions: string[]
+  scanned_regions: string[]
+  failed_regions: string[]
+  s3_buckets_requested: number
+  s3_buckets_scanned: number
+  s3_buckets_failed: number
+}
+
 export interface ScanResult {
   scan_id: string
   timestamp: string
@@ -155,6 +165,8 @@ export interface ScanResult {
   /** Populated only for live scans. Never contains credentials. */
   aws_account_id: string | null
   aws_identity_arn: string | null
+  /** Phase 4D/4E: coverage metadata (optional). */
+  coverage?: ScanCoverage | null
 }
 
 // ---------------------------------------------------------------------------
@@ -163,6 +175,9 @@ export interface ScanResult {
 
 export interface ScanRequest {
   region?: string
+  /** Phase 4E: multiple regions. Overrides 'region' when supplied.
+   *  Use ["ALL_ENABLED"] to scan all enabled regions. */
+  regions?: string[]
   /** Must be sent explicitly on every request. No implicit default in the client. */
   mode: ScanMode
   /** AWS CLI profile name for live scans. Defaults to the backend's configured profile (AWS_PROFILE env var or 'default'). */

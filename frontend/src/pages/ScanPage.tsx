@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { ErrorBanner } from '../components/shared/ErrorBanner'
 import { LoadingSpinner } from '../components/shared/LoadingSpinner'
 import { useScanStore, selectIsIdentityCurrentlyValid } from '../store/scanStore'
+import type { RegionMode as _RegionModeType } from '../store/scanStore'
 import type { ScanMode } from '../types/findings'
 
 function formatTimestamp(iso: string | null): string {
@@ -59,17 +60,155 @@ function ModeSelector({ selected, onChange, disabled }: ModeSelectorProps) {
 }
 
 // ---------------------------------------------------------------------------
+// Sub-component: Phase 4E region mode selector
+// ---------------------------------------------------------------------------
+
+function RegionModeSelector() {
+  const {
+    regionMode, selectedRegions, awsRegion,
+    setRegionMode, setSelectedRegions, setAwsRegion,
+    regionList, enabledRegionsAvailable,
+    status, identityStatus,
+  } = useScanStore()
+
+  const isBusy = status === 'scanning' || identityStatus === 'checking'
+
+  const modes: { value: _RegionModeType; label: string; desc: string }[] = [
+    { value: 'single', label: 'Single Region', desc: 'Scan one region' },
+    { value: 'multi', label: 'Multiple Regions', desc: 'Select specific regions' },
+    { value: 'all', label: 'All Enabled', desc: 'All regions enabled in this account' },
+  ]
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <p className="text-sm text-slate-400 mb-2">Region Selection</p>
+        <div role="radiogroup" aria-label="Region selection mode" className="flex gap-2 flex-wrap">
+          {modes.map((m) => (
+            <button
+              key={m.value}
+              role="radio"
+              aria-checked={regionMode === m.value}
+              onClick={() => !isBusy && setRegionMode(m.value)}
+              disabled={isBusy}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                regionMode === m.value
+                  ? 'bg-aws-500/20 border-aws-500/50 text-aws-300'
+                  : 'bg-navy-900 border-navy-600 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {regionMode === 'single' && (
+        <div>
+          <label htmlFor="aws-region-single" className="block text-sm text-slate-400 mb-1.5">
+            AWS Region
+          </label>
+          <input
+            id="aws-region-single"
+            type="text"
+            value={awsRegion}
+            onChange={(e) => setAwsRegion(e.target.value)}
+            placeholder="eu-north-1"
+            className="input max-w-xs"
+            disabled={isBusy}
+          />
+        </div>
+      )}
+
+      {regionMode === 'multi' && (
+        <div>
+          <p className="text-sm text-slate-400 mb-1.5">
+            Select regions to scan
+            {!enabledRegionsAvailable && (
+              <span className="ml-2 text-xs text-slate-500">(verify identity to see enabled status)</span>
+            )}
+          </p>
+          {regionList.length > 0 ? (
+            <div className="max-h-40 overflow-y-auto border border-navy-600 rounded-lg divide-y divide-navy-700">
+              {regionList.map((r) => {
+                const checked = selectedRegions.includes(r.name)
+                return (
+                  <label
+                    key={r.name}
+                    className={`flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-navy-800/50 ${
+                      isBusy ? 'opacity-50 pointer-events-none' : ''
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedRegions([...selectedRegions, r.name])
+                        } else {
+                          setSelectedRegions(selectedRegions.filter((x) => x !== r.name))
+                        }
+                      }}
+                      className="rounded border-navy-500"
+                    />
+                    <span className="font-mono text-xs text-slate-300">{r.name}</span>
+                    <span className="text-xs text-slate-500 flex-1">{r.description}</span>
+                    {r.enabled === true && (
+                      <span className="text-xs text-green-400">enabled</span>
+                    )}
+                    {r.enabled === false && (
+                      <span className="text-xs text-slate-600">opt-in</span>
+                    )}
+                  </label>
+                )
+              })}
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500">
+              No region list available. Load regions or enter manually below.
+            </p>
+          )}
+          {selectedRegions.length === 0 && (
+            <p className="mt-1 text-xs text-yellow-400">Select at least one region.</p>
+          )}
+          {selectedRegions.length > 0 && (
+            <p className="mt-1 text-xs text-slate-500">
+              {selectedRegions.length} region{selectedRegions.length !== 1 ? 's' : ''} selected
+            </p>
+          )}
+        </div>
+      )}
+
+      {regionMode === 'all' && (
+        <div className="rounded-lg border border-blue-500/20 bg-blue-950/10 px-3 py-2">
+          <p className="text-xs text-blue-300">
+            CloudGuard AI will call <code className="font-mono text-xs bg-navy-900/50 rounded px-1">ec2:DescribeRegions</code> to
+            discover all regions enabled for this account and scan security groups in each.
+            {!enabledRegionsAvailable && (
+              <span className="block mt-1 text-blue-400/70">
+                If region discovery is not permitted, falls back to all known regions from the AWS SDK.
+              </span>
+            )}
+          </p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Sub-component: profile selector
 // ---------------------------------------------------------------------------
 
 function ProfileSelector() {
   const {
-    awsProfile, awsRegion,
+    awsProfile,
     profiles, profilesLoading, profilesError,
-    setAwsProfile, setAwsRegion,
+    setAwsProfile,
     loadProfiles,
     identityStatus, verifiedFor, clearIdentity,
     status,
+    awsRegion,
   } = useScanStore()
 
   const isBusy = status === 'scanning' || identityStatus === 'checking'
@@ -81,23 +220,6 @@ function ProfileSelector() {
 
   return (
     <div className="space-y-4">
-      {/* AWS Region input */}
-      <div>
-        <label htmlFor="aws-region" className="block text-sm text-slate-400 mb-1.5">
-          AWS Region
-        </label>
-        <input
-          id="aws-region"
-          type="text"
-          value={awsRegion}
-          onChange={(e) => setAwsRegion(e.target.value)}
-          placeholder="eu-north-1"
-          className="input max-w-xs"
-          disabled={isBusy}
-          aria-label="AWS Region"
-        />
-      </div>
-
       {/* AWS CLI Profile selector */}
       <div>
         <div className="flex items-center justify-between mb-1.5">
@@ -435,7 +557,10 @@ export function ScanPage() {
               </div>
             </div>
 
-            {/* Profile and region configuration */}
+            {/* Phase 4E: Region selection */}
+            <RegionModeSelector />
+
+            {/* Profile and identity configuration */}
             <ProfileSelector />
 
             {/* Identity verification */}
@@ -512,7 +637,10 @@ export function ScanPage() {
               )}
               {scanResult.warnings.length > 0 && (
                 <p className="mt-1 text-xs text-yellow-400">
-                  {scanResult.warnings.length} resource{scanResult.warnings.length !== 1 ? 's' : ''} could not be fully assessed.
+                  ⚠ {scanResult.warnings.length} resource{scanResult.warnings.length !== 1 ? 's' : ''} could not be fully assessed.{' '}
+                  {scanResult.coverage?.failed_regions && scanResult.coverage.failed_regions.length > 0 && (
+                    <span>Regions with errors: {scanResult.coverage.failed_regions.join(', ')}.</span>
+                  )}
                 </p>
               )}
             </div>

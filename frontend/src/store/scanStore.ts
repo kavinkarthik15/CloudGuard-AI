@@ -19,6 +19,8 @@ import type { IdentityInfo, RegionInfo, ScanMode, ScanResult } from '../types/fi
 
 export type ScanStatus = 'idle' | 'scanning' | 'complete' | 'error'
 export type IdentityStatus = 'idle' | 'checking' | 'verified' | 'error'
+/** Phase 4E region selection mode. */
+export type RegionMode = 'single' | 'multi' | 'all'
 
 interface ScanState {
   // Scan result state
@@ -63,6 +65,10 @@ interface ScanState {
   // Live scan configuration (never contains credential values)
   awsProfile: string
   awsRegion: string
+  /** Phase 4E: region selection mode */
+  regionMode: RegionMode
+  /** Phase 4E: regions selected for multi-region scanning */
+  selectedRegions: string[]
 }
 
 interface ScanActions {
@@ -72,6 +78,10 @@ interface ScanActions {
   setAwsRegion: (region: string) => void
   /** Set the AWS profile for live scans. Clears identity if it was verified for a different profile. */
   setAwsProfile: (profile: string) => void
+  /** Phase 4E: set the region selection mode (single/multi/all). */
+  setRegionMode: (mode: RegionMode) => void
+  /** Phase 4E: set the list of selected regions for multi-region scanning. */
+  setSelectedRegions: (regions: string[]) => void
   /** Fetch available AWS CLI profiles from the backend. */
   loadProfiles: () => Promise<void>
   /** Fetch the list of AWS regions. Enriches with enabled status when a profile is provided. */
@@ -122,6 +132,8 @@ export const useScanStore = create<ScanState & ScanActions>((set, get) => ({
   // Live config
   awsProfile: DEFAULT_AWS_PROFILE,
   awsRegion: DEFAULT_AWS_REGION,
+  regionMode: 'single' as RegionMode,
+  selectedRegions: [DEFAULT_AWS_REGION],
 
   setMode: (mode) => {
     const current = get().selectedMode
@@ -181,6 +193,30 @@ export const useScanStore = create<ScanState & ScanActions>((set, get) => ({
       identityError: null,
       identityErrorCode: null,
       verifiedFor: null,
+      scanResult: null,
+      status: 'idle',
+      error: null,
+      lastScanAt: null,
+    })
+  },
+
+  setRegionMode: (mode) => {
+    const { regionMode } = get()
+    if (mode === regionMode) return
+    // Clear scan results when region mode changes — results are mode-specific
+    set({
+      regionMode: mode,
+      scanResult: null,
+      status: 'idle',
+      error: null,
+      lastScanAt: null,
+    })
+  },
+
+  setSelectedRegions: (regions) => {
+    // Clear scan results when selected regions change
+    set({
+      selectedRegions: regions,
       scanResult: null,
       status: 'idle',
       error: null,
@@ -304,11 +340,11 @@ export const useScanStore = create<ScanState & ScanActions>((set, get) => ({
     }),
 
   triggerScan: async (regionOverride?: string) => {
-    const { selectedMode, awsProfile, awsRegion, verifiedFor } = get()
+    const { selectedMode, awsProfile, awsRegion, awsRegion: _awsRegion, verifiedFor,
+            regionMode, selectedRegions } = get()
     const region = regionOverride ?? awsRegion
 
     // For live scans: verify identity is still valid for current profile/region
-    // The backend will also independently re-verify, but we guard here for UX clarity
     if (selectedMode === 'live') {
       const isStillValid =
         verifiedFor !== null &&
@@ -323,13 +359,30 @@ export const useScanStore = create<ScanState & ScanActions>((set, get) => ({
       }
     }
 
+    // Build the scan request — Phase 4E: pass regions when not in single mode
+    let scanRequest: Parameters<typeof scanApi.triggerScan>[0]
+    if (selectedMode === 'live') {
+      if (regionMode === 'all') {
+        scanRequest = { mode: 'live', regions: ['ALL_ENABLED'], aws_profile: awsProfile }
+      } else if (regionMode === 'multi' && selectedRegions.length > 0) {
+        scanRequest = { mode: 'live', regions: selectedRegions, aws_profile: awsProfile }
+      } else {
+        scanRequest = { mode: 'live', region, aws_profile: awsProfile }
+      }
+    } else {
+      // Demo mode — pass region for single mode, regions for multi (demo exercises the path)
+      if (regionMode === 'all') {
+        scanRequest = { mode: 'demo', regions: ['ALL_ENABLED'] }
+      } else if (regionMode === 'multi' && selectedRegions.length > 0) {
+        scanRequest = { mode: 'demo', regions: selectedRegions }
+      } else {
+        scanRequest = { mode: 'demo', region }
+      }
+    }
+
     set({ status: 'scanning', error: null })
     try {
-      const result = await scanApi.triggerScan(
-        selectedMode === 'live'
-          ? { mode: 'live', region, aws_profile: awsProfile }
-          : { mode: 'demo', region },
-      )
+      const result = await scanApi.triggerScan(scanRequest)
       set({
         status: 'complete',
         scanResult: result,

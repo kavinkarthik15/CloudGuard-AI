@@ -13,6 +13,7 @@ Phase 4A additions:
 Read-only IAM actions used:
   sts:GetCallerIdentity
   s3:ListAllMyBuckets
+  s3:GetBucketLocation        (Phase 4D: discover each bucket's region)
   s3:GetBucketPublicAccessBlock
   s3:GetBucketPolicyStatus
   s3:GetBucketAcl
@@ -20,6 +21,7 @@ Read-only IAM actions used:
   s3:GetBucketVersioning
   s3:GetBucketLogging
   ec2:DescribeSecurityGroups
+  ec2:DescribeRegions         (Phase 4E: ALL_ENABLED mode; gracefully degraded if denied)
 
 No write, create, delete, or mutating actions are called.
 
@@ -486,15 +488,20 @@ class Boto3ScannerProvider:
     def list_s3_buckets(self) -> list[S3BucketConfig]:
         """Enumerate all S3 buckets and retrieve their security configurations.
 
+        Phase 4D: discovers each bucket's actual AWS region and uses a
+        regional S3 client for per-bucket attribute calls. Regional clients
+        are cached within this scan to avoid redundant session creation.
+
         Uses s3:ListAllMyBuckets then per-bucket attribute calls.
         Individual attribute failures are recorded as warnings on the bucket;
         AccessDenied on ListAllMyBuckets raises InsufficientPermissionsError.
         """
-        s3 = self._session.client("s3", region_name="us-east-1")
+        # Global S3 client for listing and region discovery
+        s3_global = self._session.client("s3", region_name="us-east-1")
 
         # List buckets — if this fails it's a scan-level error, not per-resource
         try:
-            response = s3.list_buckets()
+            response = s3_global.list_buckets()
             buckets_raw = response.get("Buckets", [])
         except botocore.exceptions.ClientError as exc:
             code = exc.response["Error"]["Code"]
@@ -507,16 +514,81 @@ class Boto3ScannerProvider:
                 f"s3:ListAllMyBuckets failed ({code}): {exc.response['Error']['Message']}"
             ) from exc
 
+        # Regional client cache: region_name → boto3 S3 client
+        _regional_clients: dict[str, Any] = {}
+
         configs = []
         for bucket_meta in buckets_raw:
             bucket_name = bucket_meta["Name"]
-            config = self._build_bucket_config(s3, bucket_name)
+            config = self._build_bucket_config(
+                s3_global, bucket_name, _regional_clients
+            )
             configs.append(config)
 
         return configs
 
-    def _build_bucket_config(self, s3_client: Any, bucket_name: str) -> S3BucketConfig:
+    def _get_bucket_region(
+        self, s3_global: Any, bucket_name: str
+    ) -> tuple[str, Warning | None]:
+        """Discover the AWS region of an S3 bucket via GetBucketLocation.
+
+        Returns (region_name, warning_or_None).
+
+        Mapping rules (per AWS SDK behaviour):
+        - LocationConstraint is None or '' → 'us-east-1' (legacy default)
+        - LocationConstraint == 'EU'       → 'eu-west-1' (legacy alias)
+        - Any other string                 → used as-is
+
+        On error, falls back to 'us-east-1' and returns a Warning so the
+        caller knows the region is unknown. An inaccessible bucket is NOT
+        treated as secure — the caller records the warning and proceeds with
+        best-effort attribute scanning using the fallback region.
+        """
+        try:
+            resp = s3_global.get_bucket_location(Bucket=bucket_name)
+            constraint = resp.get("LocationConstraint")
+            if constraint is None or constraint == "":
+                return "us-east-1", None
+            if constraint == "EU":
+                return "eu-west-1", None
+            return constraint, None
+        except botocore.exceptions.ClientError as exc:
+            code = exc.response["Error"]["Code"]
+            if code in _ACCESS_DENIED_CODES:
+                return "us-east-1", Warning(
+                    resource_id=f"s3:{bucket_name}:location",
+                    reason=(
+                        f"AccessDenied — s3:GetBucketLocation on '{bucket_name}'. "
+                        "Region could not be determined; falling back to us-east-1. "
+                        "Bucket is NOT confirmed secure."
+                    ),
+                )
+            if code == "NoSuchBucket":
+                return "us-east-1", Warning(
+                    resource_id=f"s3:{bucket_name}:location",
+                    reason=(
+                        f"Bucket '{bucket_name}' no longer exists (NoSuchBucket). "
+                        "It may have been deleted between enumeration and inspection."
+                    ),
+                )
+            return "us-east-1", Warning(
+                resource_id=f"s3:{bucket_name}:location",
+                reason=(
+                    f"Could not determine region for bucket '{bucket_name}' ({code}). "
+                    "Falling back to us-east-1."
+                ),
+            )
+
+    def _build_bucket_config(
+        self,
+        s3_global: Any,
+        bucket_name: str,
+        regional_clients: dict[str, Any],
+    ) -> S3BucketConfig:
         """Fetch all security-relevant attributes for one S3 bucket.
+
+        Phase 4D: discovers the bucket's region, then uses (or creates and
+        caches) a regional S3 client for per-attribute calls.
 
         Each attribute call is isolated. AccessDenied or missing configuration
         is treated differently:
@@ -524,36 +596,69 @@ class Boto3ScannerProvider:
           - AccessDenied → attribute cannot be assessed, recorded in evidence
           - Unexpected error → attribute cannot be assessed, recorded in evidence
         """
+        # ── Phase 4D: discover bucket region ──────────────────────────────
+        bucket_region, region_warning = self._get_bucket_region(s3_global, bucket_name)
+
+        # Get or create a regional client for attribute calls
+        if bucket_region not in regional_clients:
+            try:
+                regional_clients[bucket_region] = self._session.client(
+                    "s3", region_name=bucket_region
+                )
+            except Exception:
+                # If we can't create a regional client, fall back to global
+                regional_clients[bucket_region] = s3_global
+        s3 = regional_clients[bucket_region]
+
+        # Collect warnings: start with any region-discovery warning
+        bucket_warnings: list[Warning] = []
+        if region_warning:
+            bucket_warnings.append(region_warning)
+
         # Public access block
-        pab_result = self._get_public_access_block(s3_client, bucket_name)
+        pab_result = self._get_public_access_block(s3, bucket_name)
         public_access_block = pab_result.value or PublicAccessBlockConfig(
             block_public_acls=False,
             ignore_public_acls=False,
             block_public_policy=False,
             restrict_public_buckets=False,
         )
+        if pab_result.warning:
+            bucket_warnings.append(pab_result.warning)
 
         # Bucket ACL
-        acl_result = self._get_bucket_acl(s3_client, bucket_name)
+        acl_result = self._get_bucket_acl(s3, bucket_name)
         acl_grants = acl_result.value if acl_result.value is not None else []
+        if acl_result.warning:
+            bucket_warnings.append(acl_result.warning)
 
         # Policy public status
-        policy_result = self._get_bucket_policy_status(s3_client, bucket_name)
+        policy_result = self._get_bucket_policy_status(s3, bucket_name)
         is_public_policy = policy_result.value if policy_result.value is not None else False
+        if policy_result.warning:
+            bucket_warnings.append(policy_result.warning)
 
         # Encryption
-        enc_result = self._get_bucket_encryption(s3_client, bucket_name)
+        enc_result = self._get_bucket_encryption(s3, bucket_name)
         encryption = enc_result.value  # None if not configured or error
+        if enc_result.warning:
+            bucket_warnings.append(enc_result.warning)
 
         # Versioning
-        ver_result = self._get_bucket_versioning(s3_client, bucket_name)
+        ver_result = self._get_bucket_versioning(s3, bucket_name)
         versioning_enabled = ver_result.value  # None if error, bool if fetched
+        if ver_result.warning:
+            bucket_warnings.append(ver_result.warning)
 
         # Logging
-        log_result = self._get_bucket_logging(s3_client, bucket_name)
+        log_result = self._get_bucket_logging(s3, bucket_name)
         logging_enabled = log_result.value  # None if error, bool if fetched
+        if log_result.warning:
+            bucket_warnings.append(log_result.warning)
 
-        return S3BucketConfig(
+        # bucket_warnings are stored in the typed scan_warnings field (exclude=True)
+        # so the Scanner can drain them without polluting API serialization.
+        config = S3BucketConfig(
             name=bucket_name,
             public_access_block=public_access_block,
             acl_grants=acl_grants,
@@ -561,7 +666,10 @@ class Boto3ScannerProvider:
             encryption=encryption,
             versioning_enabled=versioning_enabled,
             logging_enabled=logging_enabled,
+            region=bucket_region,
+            scan_warnings=bucket_warnings,
         )
+        return config
 
     # ------------------------------------------------------------------
     # S3 per-attribute fetchers
@@ -754,6 +862,7 @@ class Boto3ScannerProvider:
         """Enumerate all EC2 security groups in the specified region.
 
         Uses ec2:DescribeSecurityGroups with pagination.
+        Phase 4E: tags each SecurityGroupConfig with its region.
         AccessDenied raises InsufficientPermissionsError.
         """
         ec2 = self._session.client("ec2", region_name=region)
@@ -770,6 +879,7 @@ class Boto3ScannerProvider:
                         description=sg.get("Description", ""),
                         inbound_rules=inbound_rules,
                         vpc_id=sg.get("VpcId"),
+                        region=region,
                     ))
         except botocore.exceptions.ClientError as exc:
             code = exc.response["Error"]["Code"]
@@ -784,6 +894,90 @@ class Boto3ScannerProvider:
             ) from exc
 
         return groups
+
+    def list_security_groups_multi_region(
+        self,
+        regions: list[str],
+    ) -> tuple[list[SecurityGroupConfig], list[str], list[Warning]]:
+        """Phase 4E: scan EC2 security groups across multiple regions.
+
+        Parameters
+        ----------
+        regions:
+            List of region names to scan. May include the sentinel "ALL_ENABLED"
+            to discover and scan all regions enabled for this account.
+
+        Returns
+        -------
+        (all_security_groups, scanned_regions, regional_warnings)
+            all_security_groups: combined list from all successfully scanned regions.
+            scanned_regions: regions that were successfully scanned — includes regions
+                that returned zero security groups (empty ≠ failed).
+            regional_warnings: Warning entries for regions that could not be scanned.
+
+        Per-region failures are isolated — they produce a Warning and do NOT abort
+        scanning of other regions. The scanned_regions list is derived from tracking
+        each attempt explicitly, NOT from the security groups returned, so empty
+        regions are correctly reported as successful.
+        """
+        # Expand ALL_ENABLED sentinel
+        if "ALL_ENABLED" in regions:
+            resolved, err = list_enabled_regions(
+                self._session, home_region=self._region
+            )
+            if err:
+                logger.warning("Could not discover enabled regions: %s", err)
+                # Fall back to the known region list from botocore
+                resolved = list_known_regions()
+            # Keep any explicitly named regions (excluding the sentinel itself)
+            explicit = [r for r in regions if r != "ALL_ENABLED"]
+            # Union: all enabled + explicitly requested, deduplicated
+            regions = list(dict.fromkeys(explicit + resolved))
+
+        # Deduplicate while preserving order
+        seen: set[str] = set()
+        unique_regions = []
+        for r in regions:
+            if r not in seen:
+                seen.add(r)
+                unique_regions.append(r)
+
+        all_groups: list[SecurityGroupConfig] = []
+        scanned_regions: list[str] = []   # successfully scanned (even if 0 SGs)
+        regional_warnings: list[Warning] = []
+
+        for region in unique_regions:
+            try:
+                groups = self.list_security_groups(region)
+                all_groups.extend(groups)
+                # Record as successfully scanned regardless of how many SGs returned
+                scanned_regions.append(region)
+            except (InsufficientPermissionsError, SessionExpiredError) as exc:
+                regional_warnings.append(Warning(
+                    resource_id=f"ec2:{region}:security-groups",
+                    reason=(
+                        f"Could not scan EC2 security groups in '{region}': {exc}. "
+                        "Results from other regions are unaffected."
+                    ),
+                ))
+            except botocore.exceptions.BotoCoreError as exc:
+                regional_warnings.append(Warning(
+                    resource_id=f"ec2:{region}:security-groups",
+                    reason=(
+                        f"Network or endpoint error scanning '{region}': "
+                        f"{type(exc).__name__}. Other regions unaffected."
+                    ),
+                ))
+            except Exception as exc:
+                regional_warnings.append(Warning(
+                    resource_id=f"ec2:{region}:security-groups",
+                    reason=(
+                        f"Unexpected error scanning '{region}': {type(exc).__name__}. "
+                        "Other regions unaffected."
+                    ),
+                ))
+
+        return all_groups, scanned_regions, regional_warnings
 
     @staticmethod
     def _parse_inbound_rules(ip_permissions: list[dict]) -> list[InboundRule]:

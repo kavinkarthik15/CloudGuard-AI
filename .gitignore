@@ -24,3 +24,5 @@ coverage/
 Thumbs.db
 # Local MCP configuration (may contain credentials)
 .kiro/settings/mcp.json
+# macOS metadata directories created when extracting ZIP archives on macOS
+__MACOSX/

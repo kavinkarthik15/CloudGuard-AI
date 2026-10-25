@@ -142,9 +142,13 @@ export const scanApi = {
    * to guarantee the export matches the displayed findings.
    */
   async triggerScan(request: ScanRequest): Promise<ScanResult> {
-    const body: Record<string, string | undefined> = {
+    const body: Record<string, unknown> = {
       region: request.region ?? 'us-east-1',
       mode: request.mode,
+    }
+    // Phase 4E: pass regions array when present
+    if (request.regions && request.regions.length > 0) {
+      body.regions = request.regions
     }
     if (request.mode === 'live' && request.aws_profile) {
       body.aws_profile = request.aws_profile

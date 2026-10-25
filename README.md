@@ -228,6 +228,7 @@ CloudGuard AI requires only the following read-only actions:
 |---|---|
 | `sts:GetCallerIdentity` | Verify identity before scan |
 | `s3:ListAllMyBuckets` | Enumerate S3 buckets |
+| `s3:GetBucketLocation` | Discover each bucket's actual AWS region (Phase 4D) |
 | `s3:GetBucketPublicAccessBlock` | Read Block Public Access settings |
 | `s3:GetBucketPolicyStatus` | Check if bucket policy is public |
 | `s3:GetBucketAcl` | Read ACL grants |
@@ -235,6 +236,7 @@ CloudGuard AI requires only the following read-only actions:
 | `s3:GetBucketVersioning` | Check versioning status |
 | `s3:GetBucketLogging` | Check access logging |
 | `ec2:DescribeSecurityGroups` | Read security group inbound rules |
+| `ec2:DescribeRegions` | Discover enabled regions for All-Enabled scan mode (Phase 4E; gracefully degraded if denied) |
 
 No write, create, delete, or IAM permissions are required or used.
 

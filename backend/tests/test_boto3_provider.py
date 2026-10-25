@@ -214,6 +214,7 @@ def test_list_s3_buckets_with_no_public_access_block():
     provider = _make_provider()
     mock_s3 = MagicMock()
     mock_s3.list_buckets.return_value = {"Buckets": [{"Name": "test-bucket"}]}
+    mock_s3.get_bucket_location.return_value = {"LocationConstraint": None}  # us-east-1
 
     mock_s3.get_bucket_public_access_block.side_effect = _make_client_error(
         "NoSuchPublicAccessBlockConfiguration"
@@ -246,6 +247,7 @@ def test_list_s3_buckets_with_block_enabled():
     provider = _make_provider()
     mock_s3 = MagicMock()
     mock_s3.list_buckets.return_value = {"Buckets": [{"Name": "secure-bucket"}]}
+    mock_s3.get_bucket_location.return_value = {"LocationConstraint": None}  # us-east-1
 
     mock_s3.get_bucket_public_access_block.return_value = {
         "PublicAccessBlockConfiguration": {
@@ -281,6 +283,7 @@ def test_list_s3_buckets_access_denied_on_attribute_produces_warning():
     provider = _make_provider()
     mock_s3 = MagicMock()
     mock_s3.list_buckets.return_value = {"Buckets": [{"Name": "restricted-bucket"}]}
+    mock_s3.get_bucket_location.return_value = {"LocationConstraint": None}  # us-east-1
 
     mock_s3.get_bucket_public_access_block.side_effect = _make_client_error("AccessDenied")
     mock_s3.get_bucket_acl.side_effect = _make_client_error("AccessDenied")
@@ -303,6 +306,7 @@ def test_list_s3_public_bucket_produces_critical_finding():
     provider = _make_provider()
     mock_s3 = MagicMock()
     mock_s3.list_buckets.return_value = {"Buckets": [{"Name": "public-bucket"}]}
+    mock_s3.get_bucket_location.return_value = {"LocationConstraint": None}  # us-east-1
 
     mock_s3.get_bucket_public_access_block.side_effect = _make_client_error(
         "NoSuchPublicAccessBlockConfiguration"
@@ -498,6 +502,7 @@ def test_scanner_live_findings_not_labeled_simulated():
     provider = _make_provider()
     mock_s3 = MagicMock()
     mock_s3.list_buckets.return_value = {"Buckets": [{"Name": "live-public-bucket"}]}
+    mock_s3.get_bucket_location.return_value = {"LocationConstraint": None}  # us-east-1
 
     mock_s3.get_bucket_public_access_block.side_effect = _make_client_error(
         "NoSuchPublicAccessBlockConfiguration"

@@ -41,6 +41,7 @@ from models import (
     ProfilesResponse,
     RegionsResponse,
     RegionInfo,
+    ScanCoverage,
     ScanMode,
     ScanRequest,
     ScanResult,
@@ -420,7 +421,11 @@ async def _run_demo_scan(request: ScanRequest) -> ScanResult | JSONResponse:
     try:
         provider = get_simulated_provider()
         scanner = Scanner(provider)
-        result = scanner.run(region=request.region, simulated=True)
+        result = scanner.run(
+            region=request.region,
+            regions=request.regions if request.regions else None,
+            simulated=True,
+        )
         _store_scan_result(result)
         return result
     except RuntimeError as exc:
@@ -452,6 +457,17 @@ async def _run_live_scan(request: ScanRequest) -> ScanResult | JSONResponse:
         _validate_region_name(resolved_region)
     except ValueError as exc:
         return error_response(400, "INVALID_REGION", str(exc))
+
+    # Phase 4E: validate all regions in the list (excluding ALL_ENABLED sentinel)
+    if request.regions:
+        for r in request.regions:
+            if r == "ALL_ENABLED":
+                continue
+            try:
+                _validate_region_name(r)
+            except ValueError as exc:
+                return error_response(400, "INVALID_REGION",
+                                      f"Invalid region '{r}': {exc}")
 
     # --- Identity pre-check: must succeed before any scan work ---
     try:
@@ -514,8 +530,11 @@ async def _run_live_scan(request: ScanRequest) -> ScanResult | JSONResponse:
     # --- Scan body ---
     try:
         scanner = Scanner(provider)
+        # Phase 4E: pass regions list when provided
+        scan_regions = request.regions if request.regions else None
         result = scanner.run(
             region=resolved_region,
+            regions=scan_regions,
             simulated=False,
             aws_account_id=identity["account_id"],
             aws_identity_arn=identity["arn"],
