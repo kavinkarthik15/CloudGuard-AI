@@ -6,6 +6,75 @@ import { StatsPanel } from '../components/dashboard/StatsPanel'
 import { ErrorBanner } from '../components/shared/ErrorBanner'
 import { LoadingSpinner } from '../components/shared/LoadingSpinner'
 import { useScanStore } from '../store/scanStore'
+import type { ScanCoverage } from '../types/findings'
+
+// ---------------------------------------------------------------------------
+// CoveragePanel — displays what was actually discovered and evaluated
+// ---------------------------------------------------------------------------
+
+function CoveragePanel({ coverage }: { coverage: ScanCoverage }) {
+  const s3Label = (() => {
+    if (coverage.s3_buckets_requested === 0) return 'No S3 buckets found in account'
+    if (coverage.s3_buckets_failed > 0) {
+      return `${coverage.s3_buckets_scanned}/${coverage.s3_buckets_requested} S3 buckets evaluated (${coverage.s3_buckets_failed} failed)`
+    }
+    return `${coverage.s3_buckets_scanned}/${coverage.s3_buckets_requested} S3 buckets evaluated`
+  })()
+
+  const ec2Label = (() => {
+    if (coverage.ec2_sgs_discovered === 0) {
+      const region = coverage.scanned_regions[0] ?? 'selected region'
+      return `No EC2 security groups found in ${region}`
+    }
+    if (coverage.ec2_sgs_failed > 0) {
+      return `${coverage.ec2_sgs_evaluated}/${coverage.ec2_sgs_discovered} security groups evaluated (${coverage.ec2_sgs_failed} failed)`
+    }
+    return `${coverage.ec2_sgs_evaluated}/${coverage.ec2_sgs_discovered} security groups evaluated`
+  })()
+
+  const regionLabel = coverage.scanned_regions.length > 0
+    ? coverage.scanned_regions.join(', ')
+    : '—'
+
+  const hasFailures = coverage.failed_regions.length > 0 ||
+    coverage.s3_buckets_failed > 0 || coverage.ec2_sgs_failed > 0
+
+  return (
+    <div className={`rounded-lg border px-4 py-3 text-xs space-y-1.5 ${
+      hasFailures
+        ? 'border-yellow-500/20 bg-yellow-950/10'
+        : 'border-navy-600 bg-navy-900/30'
+    }`} aria-label="Scan coverage summary">
+      <p className="text-slate-400 font-medium">Scan coverage</p>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5 text-slate-300">
+        <div className="flex items-center gap-1.5">
+          <span className="text-slate-500">Region:</span>
+          <span className="font-mono">{regionLabel}</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-slate-500">S3:</span>
+          <span className={coverage.s3_buckets_requested === 0 ? 'text-slate-500 italic' : ''}>
+            {s3Label}
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-slate-500">EC2:</span>
+          <span className={coverage.ec2_sgs_discovered === 0 ? 'text-slate-500 italic' : ''}>
+            {ec2Label}
+          </span>
+        </div>
+      </div>
+      {coverage.failed_regions.length > 0 && (
+        <p className="text-yellow-400">
+          ⚠ Regions with errors: {coverage.failed_regions.join(', ')}
+        </p>
+      )}
+    </div>
+  )
+}
+
+// Export so ScanPage can use the same component
+export { CoveragePanel }
 
 function formatTimestamp(iso: string | null): string {
   if (!iso) return ''
@@ -23,9 +92,11 @@ export function DashboardPage() {
   const { status, scanResult, error, lastScanAt, triggerScan, clearError } = useScanStore()
   const [warningsOpen, setWarningsOpen] = useState(false)
 
-  // Auto-trigger demo scan on first load if no result yet
+  // Auto-trigger demo scan on first load if no result yet.
+  // Only fires for demo mode — live scans are triggered explicitly by the user
+  // on the Scan page. A live result must never be overwritten by an auto-demo-scan.
   useEffect(() => {
-    if (scanResult === null && status === 'idle') {
+    if (scanResult === null && status === 'idle' && selectedMode === 'demo') {
       triggerScan()
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -127,13 +198,21 @@ export function DashboardPage() {
 
           {/* Zero findings note for live scans */}
           {totalFindings === 0 && isLiveResult && (
-            <div className="card border-slate-600/30 bg-slate-800/20">
+            <div className="card border-slate-600/30 bg-slate-800/20 space-y-3">
               <p className="text-sm text-slate-400">
                 <strong className="text-slate-300">No findings detected</strong> in this live scan.
                 This means no misconfigurations matching the current rules were found in the scanned
                 resources — it does not guarantee a fully secure configuration.
               </p>
+              {scanResult.coverage && (
+                <CoveragePanel coverage={scanResult.coverage} />
+              )}
             </div>
+          )}
+
+          {/* Coverage detail for live scans with findings */}
+          {totalFindings > 0 && isLiveResult && scanResult.coverage && (
+            <CoveragePanel coverage={scanResult.coverage} />
           )}
 
           {/* Chart + Recent findings */}

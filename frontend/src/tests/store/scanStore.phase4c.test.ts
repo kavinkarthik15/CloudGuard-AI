@@ -85,7 +85,7 @@ describe('setAwsProfile — Phase 4C', () => {
         identityStatus: 'verified',
         identityInfo: mockIdentity('profile-a'),
         identityErrorCode: null,
-        verifiedFor: { profile: 'profile-a', region: 'eu-north-1' },
+        verifiedFor: { profile: 'profile-a', region: 'eu-north-1', verificationGen: 1 },
         scanResult: mockScanResult(false),
         status: 'complete',
       })
@@ -133,7 +133,7 @@ describe('setAwsProfile — Phase 4C', () => {
         awsProfile: 'profile-a',
         identityStatus: 'verified',
         identityInfo: mockIdentity('profile-a'),
-        verifiedFor: { profile: 'profile-a', region: 'eu-north-1' },
+        verifiedFor: { profile: 'profile-a', region: 'eu-north-1', verificationGen: 1 },
         scanResult: mockScanResult(false),
         status: 'complete',
       })
@@ -159,7 +159,7 @@ describe('setAwsRegion — Phase 4C', () => {
         awsRegion: 'eu-north-1',
         identityStatus: 'verified',
         identityInfo: mockIdentity('profile-a', 'eu-north-1'),
-        verifiedFor: { profile: 'profile-a', region: 'eu-north-1' },
+        verifiedFor: { profile: 'profile-a', region: 'eu-north-1', verificationGen: 1 },
         scanResult: mockScanResult(false),
         status: 'complete',
       })
@@ -337,7 +337,7 @@ describe('Demo Mode — independence from AWS credentials', () => {
         identityStatus: 'verified',
         identityInfo: mockIdentity(),
         identityErrorCode: null,
-        verifiedFor: { profile: 'profile-a', region: 'eu-north-1' },
+        verifiedFor: { profile: 'profile-a', region: 'eu-north-1', verificationGen: 1 },
         scanResult: mockScanResult(false),
         status: 'complete',
       })

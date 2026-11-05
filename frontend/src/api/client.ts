@@ -10,11 +10,13 @@
  *   corresponds to the scan that produced the currently displayed findings.
  *   A missing or expired scan_id returns SCAN_NOT_FOUND (404), not stale data.
  *
- * Security: never sends or receives AWS credentials, access keys, or session tokens.
+ * Security: credential values are sent to the local backend in POST request bodies
+ * only when the user explicitly enters them for the local-testing flow. They are
+ * never stored, logged, or included in API responses.
  */
 import type { ErrorResponse, IdentityInfo, ProfilesResponse, RegionsResponse, ScanRequest, ScanResult } from '../types/findings'
 
-const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string) || 'http://127.0.0.1:8001'
+const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string) || 'http://127.0.0.1:8000'
 
 // ---------------------------------------------------------------------------
 // Typed error class
@@ -119,11 +121,35 @@ export const scanApi = {
 
   /**
    * Verify AWS credentials before initiating a live scan.
-   * Returns caller identity metadata — no credentials included.
-   * Throws ApiError with code INVALID_CREDENTIALS (401) or
-   * INSUFFICIENT_PERMISSIONS (403) on failure.
+   * Accepts explicit credentials via POST body (local testing flow).
+   * Returns caller identity metadata — no credentials included in response.
+   * Throws ApiError with structured error codes on failure.
    */
-  async checkIdentity(profile?: string, region?: string): Promise<IdentityInfo> {
+  async checkIdentity(
+    profile?: string,
+    region?: string,
+    explicitCreds?: { accessKeyId: string; secretAccessKey: string; sessionToken?: string },
+  ): Promise<IdentityInfo> {
+    if (explicitCreds) {
+      // POST with credentials in body (preferred for explicit creds — avoids URL exposure)
+      const body: Record<string, string | undefined> = {
+        region: region ?? 'us-east-1',
+        aws_access_key_id: explicitCreds.accessKeyId,
+        aws_secret_access_key: explicitCreds.secretAccessKey,
+        aws_session_token: explicitCreds.sessionToken,
+      }
+      const response = await fetchWithTimeout(
+        `${BASE_URL}/api/identity`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+        30_000,
+      )
+      return parseJson<IdentityInfo>(response)
+    }
+    // Legacy GET path for profile-based auth
     const params = new URLSearchParams()
     if (profile) params.set('profile', profile)
     if (region) params.set('region', region)
@@ -153,6 +179,10 @@ export const scanApi = {
     if (request.mode === 'live' && request.aws_profile) {
       body.aws_profile = request.aws_profile
     }
+    // Explicit credentials (local testing flow) — only included when present
+    if (request.aws_access_key_id) body.aws_access_key_id = request.aws_access_key_id
+    if (request.aws_secret_access_key) body.aws_secret_access_key = request.aws_secret_access_key
+    if (request.aws_session_token) body.aws_session_token = request.aws_session_token
     const response = await fetchWithTimeout(`${BASE_URL}/api/scan`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -317,12 +317,27 @@ npm run build
 
 ## Security Model
 
-- **Local only:** The backend binds to `127.0.0.1:8001`. It is not exposed to the network.
-- **Read-only:** No AWS write, create, delete, or IAM actions are called.
-- **No credential storage:** AWS credentials are never logged, stored in memory beyond the request, or returned in any API response.
+- **Local development:** By default the backend binds to `127.0.0.1` so it is only reachable from the same machine. This is a development convenience, not a security control. A production or shared deployment must configure its own network controls (firewall, reverse proxy, authentication) appropriate to the hosting environment.
+- **Demo-Only production mode:** Public or shared deployments must set `ALLOW_LIVE_AWS_SCANS=false` on the backend. This rejects all live AWS operations (identity verification, live scans, credential-based region enrichment) with HTTP 403 `LIVE_AWS_DISABLED` before any Boto3 session is created. Demo Mode continues to work. See `backend/.env.example` for the exact configuration.
+- **Read-only AWS access:** When live scanning is enabled, the application calls only read-only AWS APIs (`s3:List*`, `s3:Get*`, `ec2:Describe*`, `sts:GetCallerIdentity`). No write, create, delete, or IAM actions are called. AWS IAM policies enforce this restriction; the application does not.
+- **Credential handling for live scans:** In local development, AWS credentials (Access Key ID, Secret Access Key, optional Session Token) are supplied by the user through the Scan page form for each live scan. Credentials are held transiently for the duration of the request, forwarded to the backend over the local connection, used to create a request-scoped Boto3 session, and then discarded. Credentials are never stored in browser storage, Zustand state, application databases, scan results, or exports. Credential values must never appear in logs, API responses, error messages, or generated reports.
 - **No credential exposure in exports:** JSON and CSV exports contain findings only. The `simulated` flag in every export distinguishes demo from live results.
 - **AccessDenied is not a clean result:** If CloudGuard AI cannot retrieve a security attribute due to missing permissions, it surfaces a warning for that resource rather than treating it as secure.
+- **S3 bucket policies:** CloudGuard AI checks whether a bucket policy is public via `s3:GetBucketPolicyStatus` (the `IsPublic` field). It does **not** analyze or display the full contents of S3 bucket policies. A bucket with a complex policy that `GetBucketPolicyStatus` reports as non-public will not produce a finding for policy contents, even if the policy contains permissive statements.
 - **Secret scanning:** Gitleaks v8.30.1 was run against the full git history. Zero genuine secrets found. See [PRE_COMPETITION_VERIFICATION.md](PRE_COMPETITION_VERIFICATION.md).
+
+### Scanner Scope
+
+CloudGuard AI scans **S3 buckets** and **EC2 security groups** only. It does not provide comprehensive AWS account security coverage. The following are **not** scanned:
+
+- IAM policies, users, roles, and permission boundaries
+- CloudTrail configuration and logging
+- RDS, Lambda, VPC Flow Logs, CloudWatch, Route 53
+- S3 bucket policies (only `IsPublic` status via `GetBucketPolicyStatus`)
+- Network ACLs, route tables, and VPC configuration
+- AWS Config rules and Security Hub findings
+
+Adding coverage for additional services is documented in the Future Roadmap.
 
 ---
 

@@ -32,6 +32,14 @@ interface ScanState {
   // Mode selection (UI preference only — provenance is in ScanResult.simulated)
   selectedMode: ScanMode
 
+  /**
+   * Whether live AWS scanning is enabled in this deployment.
+   * Populated from GET /api/health on startup.
+   * false in production (demo-only) deployments — the backend enforces this.
+   * The frontend restriction is a usability safeguard, not the security boundary.
+   */
+  liveModeAvailable: boolean
+
   // AWS profile discovery
   profiles: string[]
   profilesLoading: boolean
@@ -59,8 +67,20 @@ interface ScanState {
    * The (profile, region) pair that was successfully verified.
    * null if no verification has been done or verification was cleared.
    * Used to detect stale identity when profile or region changes.
+   *
+   * verificationGen: a monotonically increasing counter incremented on each
+   * checkIdentity call. Used to detect stale async responses — if a new
+   * verification was started (or credentials were cleared) while a previous
+   * response was in flight, the generation number will have changed and the
+   * stale response is discarded. This is NOT a credential-derived value;
+   * it contains no secret information.
    */
-  verifiedFor: { profile: string; region: string } | null
+  verifiedFor: { profile: string; region: string; verificationGen: number } | null
+
+  /** Monotonically increasing counter for stale-response detection.
+   *  Incremented each time checkIdentity is called or clearIdentity is invoked.
+   *  Contains no credential values. */
+  verificationGen: number
 
   // Live scan configuration (never contains credential values)
   awsProfile: string
@@ -84,14 +104,20 @@ interface ScanActions {
   setSelectedRegions: (regions: string[]) => void
   /** Fetch available AWS CLI profiles from the backend. */
   loadProfiles: () => Promise<void>
+  /** Fetch health status including live mode availability. */
+  loadHealth: () => Promise<void>
   /** Fetch the list of AWS regions. Enriches with enabled status when a profile is provided. */
   loadRegions: (profile?: string) => Promise<void>
-  /** Check AWS identity. Sets verifiedFor on success. */
-  checkIdentity: () => Promise<void>
+  /** Check AWS identity. Sets verifiedFor on success.
+   *  Accepts optional explicit credentials for the local-testing flow.
+   *  Credential values are never stored in the Zustand store. */
+  checkIdentity: (explicitCreds?: { accessKeyId: string; secretAccessKey: string; sessionToken?: string }) => Promise<void>
   /** Clear identity state (e.g. when switching away from live mode). */
   clearIdentity: () => void
-  /** Trigger a scan in the currently selected mode. */
-  triggerScan: (region?: string) => Promise<void>
+  /** Trigger a scan in the currently selected mode.
+   *  Accepts optional explicit credentials for the local-testing flow.
+   *  Credential values are never stored in the Zustand store. */
+  triggerScan: (region?: string, explicitCreds?: { accessKeyId: string; secretAccessKey: string; sessionToken?: string }) => Promise<void>
   clearError: () => void
 }
 
@@ -110,6 +136,11 @@ export const useScanStore = create<ScanState & ScanActions>((set, get) => ({
 
   // Mode
   selectedMode: 'demo',
+  // Fail-closed default: live mode is unavailable until the backend's
+  // /api/health endpoint explicitly reports live_mode_available=true.
+  // In local development this happens within milliseconds of app startup.
+  // In production (ALLOW_LIVE_AWS_SCANS=false) the backend never enables it.
+  liveModeAvailable: false,
 
   // Profile discovery
   profiles: [],
@@ -128,6 +159,7 @@ export const useScanStore = create<ScanState & ScanActions>((set, get) => ({
   identityError: null,
   identityErrorCode: null,
   verifiedFor: null,
+  verificationGen: 0,
 
   // Live config
   awsProfile: DEFAULT_AWS_PROFILE,
@@ -224,6 +256,20 @@ export const useScanStore = create<ScanState & ScanActions>((set, get) => ({
     })
   },
 
+  loadHealth: async () => {
+    try {
+      const data = await scanApi.health()
+      // Only enable live mode when the backend explicitly returns true.
+      // Any missing, malformed, or falsy value keeps live mode disabled (fail-closed).
+      set({ liveModeAvailable: data.live_mode_available === true })
+    } catch {
+      // Health check failed (backend unreachable, network error, parse error).
+      // Explicitly set to false — fail-closed. Even if a previous health check
+      // succeeded, a failed refresh must disable live mode.
+      set({ liveModeAvailable: false })
+    }
+  },
+
   loadProfiles: async () => {
     set({ profilesLoading: true, profilesError: null })
     try {
@@ -238,14 +284,17 @@ export const useScanStore = create<ScanState & ScanActions>((set, get) => ({
         return
       }
       // If there's a default profile from the env and it's not already the store default,
-      // update the store to use it
+      // update the store to use it.
+      // Only update if: the user hasn't manually changed it AND there is no active scan result.
+      // Updating awsProfile calls setAwsProfile which wipes scanResult — we must not do
+      // that silently if the user already has a completed scan.
       const defaultProfile = response.default_profile ?? DEFAULT_AWS_PROFILE
-      const { awsProfile } = get()
-      // Only update if it's the initial value (user hasn't manually changed it)
+      const { awsProfile, scanResult } = get()
       const shouldUpdateProfile =
         awsProfile === DEFAULT_AWS_PROFILE &&
         defaultProfile !== DEFAULT_AWS_PROFILE &&
-        response.profiles.includes(defaultProfile)
+        response.profiles.includes(defaultProfile) &&
+        scanResult === null   // ← never wipe an existing result during profile discovery
       set({
         profiles: response.profiles,
         profilesLoading: false,
@@ -288,18 +337,34 @@ export const useScanStore = create<ScanState & ScanActions>((set, get) => ({
     }
   },
 
-  checkIdentity: async () => {
-    const { awsProfile, awsRegion } = get()
-    // Capture profile and region at call start for stale-response detection
+  checkIdentity: async (explicitCreds?: { accessKeyId: string; secretAccessKey: string; sessionToken?: string }) => {
+    const { awsProfile, awsRegion, verificationGen } = get()
+    // Capture profile, region, and generation at call start for stale-response detection.
+    // The generation counter is NOT credential-derived — it's a monotonic counter
+    // that increments on each checkIdentity call and on clearIdentity.
+    // If credentials change while verification is in flight, the component calls
+    // clearIdentity() which increments verificationGen, so the stale response
+    // sees a mismatched generation and is discarded.
     const profileAtStart = awsProfile
     const regionAtStart = awsRegion
+    const genAtStart = verificationGen
 
-    set({ identityStatus: 'checking', identityError: null, identityErrorCode: null, identityInfo: null, verifiedFor: null })
+    set({
+      identityStatus: 'checking',
+      identityError: null,
+      identityErrorCode: null,
+      identityInfo: null,
+      verifiedFor: null,
+      verificationGen: verificationGen + 1,
+    })
     try {
-      const info = await scanApi.checkIdentity(awsProfile, awsRegion)
-      // Stale-response guard: discard result if profile/region changed while in flight
+      // Forward explicit creds to API — they are NOT stored in the store
+      const info = await scanApi.checkIdentity(awsProfile, awsRegion, explicitCreds)
+      // Stale-response guard: discard result if profile/region changed or
+      // a new verification was started (generation changed) while in flight.
       const current = get()
-      if (current.awsProfile !== profileAtStart || current.awsRegion !== regionAtStart) {
+      if (current.awsProfile !== profileAtStart || current.awsRegion !== regionAtStart ||
+          current.verificationGen !== genAtStart + 1) {
         return
       }
       set({
@@ -307,12 +372,13 @@ export const useScanStore = create<ScanState & ScanActions>((set, get) => ({
         identityInfo: info,
         identityError: null,
         identityErrorCode: null,
-        verifiedFor: { profile: profileAtStart, region: regionAtStart },
+        verifiedFor: { profile: profileAtStart, region: regionAtStart, verificationGen: genAtStart + 1 },
       })
     } catch (err) {
-      // Stale-response guard: discard error if profile/region changed while in flight
+      // Stale-response guard: discard error if profile/region or generation changed
       const current = get()
-      if (current.awsProfile !== profileAtStart || current.awsRegion !== regionAtStart) {
+      if (current.awsProfile !== profileAtStart || current.awsRegion !== regionAtStart ||
+          current.verificationGen !== genAtStart + 1) {
         return
       }
       const errorCode = err instanceof ApiError ? err.code : null
@@ -331,20 +397,28 @@ export const useScanStore = create<ScanState & ScanActions>((set, get) => ({
   },
 
   clearIdentity: () =>
-    set({
+    set((state) => ({
       identityStatus: 'idle',
       identityInfo: null,
       identityError: null,
       identityErrorCode: null,
       verifiedFor: null,
-    }),
+      // Increment generation so any in-flight checkIdentity response is discarded
+      verificationGen: state.verificationGen + 1,
+    })),
 
-  triggerScan: async (regionOverride?: string) => {
+  triggerScan: async (regionOverride?: string, explicitCreds?: { accessKeyId: string; secretAccessKey: string; sessionToken?: string }) => {
     const { selectedMode, awsProfile, awsRegion, awsRegion: _awsRegion, verifiedFor,
             regionMode, selectedRegions } = get()
     const region = regionOverride ?? awsRegion
 
-    // For live scans: verify identity is still valid for current profile/region
+    // For live scans: verify identity is still valid for current profile/region.
+    // The component-level handleCredsChange → clearIdentity() ensures that any
+    // credential change invalidates the verification. The store enforces that
+    // verifiedFor is not null and matches the current profile/region.
+    // Credential-to-scan consistency is enforced at the component level:
+    // ScanPage tracks which credentials were verified in local state and only
+    // allows scanning with those exact credentials.
     if (selectedMode === 'live') {
       const isStillValid =
         verifiedFor !== null &&
@@ -360,14 +434,20 @@ export const useScanStore = create<ScanState & ScanActions>((set, get) => ({
     }
 
     // Build the scan request — Phase 4E: pass regions when not in single mode
+    // Explicit credentials are forwarded as request fields but never stored in state
     let scanRequest: Parameters<typeof scanApi.triggerScan>[0]
     if (selectedMode === 'live') {
+      const credFields = explicitCreds ? {
+        aws_access_key_id: explicitCreds.accessKeyId,
+        aws_secret_access_key: explicitCreds.secretAccessKey,
+        aws_session_token: explicitCreds.sessionToken,
+      } : { aws_profile: awsProfile }
       if (regionMode === 'all') {
-        scanRequest = { mode: 'live', regions: ['ALL_ENABLED'], aws_profile: awsProfile }
+        scanRequest = { mode: 'live', regions: ['ALL_ENABLED'], ...credFields }
       } else if (regionMode === 'multi' && selectedRegions.length > 0) {
-        scanRequest = { mode: 'live', regions: selectedRegions, aws_profile: awsProfile }
+        scanRequest = { mode: 'live', regions: selectedRegions, ...credFields }
       } else {
-        scanRequest = { mode: 'live', region, aws_profile: awsProfile }
+        scanRequest = { mode: 'live', region, ...credFields }
       }
     } else {
       // Demo mode — pass region for single mode, regions for multi (demo exercises the path)

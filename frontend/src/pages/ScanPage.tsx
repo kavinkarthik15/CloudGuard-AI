@@ -1,9 +1,10 @@
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ErrorBanner } from '../components/shared/ErrorBanner'
 import { LoadingSpinner } from '../components/shared/LoadingSpinner'
 import { useScanStore, selectIsIdentityCurrentlyValid } from '../store/scanStore'
 import type { RegionMode as _RegionModeType } from '../store/scanStore'
 import type { ScanMode } from '../types/findings'
+import { CoveragePanel } from './DashboardPage'
 
 function formatTimestamp(iso: string | null): string {
   if (!iso) return ''
@@ -25,9 +26,11 @@ interface ModeSelectorProps {
   selected: ScanMode
   onChange: (mode: ScanMode) => void
   disabled: boolean
+  /** When false, the Live AWS tab is hidden/disabled (production demo-only mode). */
+  liveModeAvailable: boolean
 }
 
-function ModeSelector({ selected, onChange, disabled }: ModeSelectorProps) {
+function ModeSelector({ selected, onChange, disabled, liveModeAvailable }: ModeSelectorProps) {
   return (
     <div
       role="tablist"
@@ -36,22 +39,29 @@ function ModeSelector({ selected, onChange, disabled }: ModeSelectorProps) {
     >
       {(['demo', 'live'] as ScanMode[]).map((mode) => {
         const isActive = selected === mode
+        const isLiveUnavailable = mode === 'live' && !liveModeAvailable
         return (
           <button
             key={mode}
             role="tab"
             aria-selected={isActive}
-            onClick={() => !disabled && onChange(mode)}
-            disabled={disabled}
+            onClick={() => !disabled && !isLiveUnavailable && onChange(mode)}
+            disabled={disabled || isLiveUnavailable}
+            title={isLiveUnavailable ? 'Live AWS scanning is disabled in this deployment.' : undefined}
             className={`px-5 py-2 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-aws-500 ${
               isActive
                 ? mode === 'demo'
                   ? 'bg-amber-500/15 text-amber-300 border-r border-navy-600'
                   : 'bg-green-900/30 text-green-300'
-                : 'bg-navy-900 text-slate-400 hover:text-slate-200 border-r border-navy-600 last:border-r-0'
+                : isLiveUnavailable
+                  ? 'bg-navy-900 text-slate-600 border-r border-navy-600 last:border-r-0 cursor-not-allowed'
+                  : 'bg-navy-900 text-slate-400 hover:text-slate-200 border-r border-navy-600 last:border-r-0'
             } disabled:opacity-50 disabled:cursor-not-allowed`}
           >
             {mode === 'demo' ? '⬡ Demo Mode' : '⬡ Live AWS'}
+            {isLiveUnavailable && (
+              <span className="ml-1.5 text-xs text-slate-600">(disabled)</span>
+            )}
           </button>
         )
       })}
@@ -197,133 +207,131 @@ function RegionModeSelector() {
 }
 
 // ---------------------------------------------------------------------------
-// Sub-component: profile selector
+// Sub-component: credential form (replaces profile selector for local testing)
 // ---------------------------------------------------------------------------
 
-function ProfileSelector() {
-  const {
-    awsProfile,
-    profiles, profilesLoading, profilesError,
-    setAwsProfile,
-    loadProfiles,
-    identityStatus, verifiedFor, clearIdentity,
-    status,
-    awsRegion,
-  } = useScanStore()
+interface ExplicitCreds {
+  accessKeyId: string
+  secretAccessKey: string
+  sessionToken: string
+}
 
-  const isBusy = status === 'scanning' || identityStatus === 'checking'
+interface CredentialFormProps {
+  creds: ExplicitCreds
+  onChange: (creds: ExplicitCreds) => void
+  disabled: boolean
+}
 
-  // Show a stale-identity warning when region or profile diverges from verifiedFor
-  const isStale =
-    verifiedFor !== null &&
-    (verifiedFor.profile !== awsProfile || verifiedFor.region !== awsRegion)
+function CredentialForm({ creds, onChange, disabled }: CredentialFormProps) {
+  const [showSecret, setShowSecret] = useState(false)
+  const [showToken, setShowToken] = useState(false)
+
+  const keyIdValid = creds.accessKeyId.trim().length === 0 ||
+    /^(AKIA|ASIA)[A-Z0-9]{16}$/.test(creds.accessKeyId.trim())
 
   return (
     <div className="space-y-4">
-      {/* AWS CLI Profile selector */}
-      <div>
-        <div className="flex items-center justify-between mb-1.5">
-          <label htmlFor="aws-profile" className="block text-sm text-slate-400">
-            AWS CLI Profile
-          </label>
-          <button
-            type="button"
-            onClick={() => loadProfiles()}
-            disabled={isBusy || profilesLoading}
-            aria-label="Refresh AWS profiles"
-            className="btn-ghost text-xs py-1 px-2"
-            title="Refresh profile list from local AWS configuration"
-          >
-            {profilesLoading ? (
-              <LoadingSpinner size="sm" label="Loading profiles…" />
-            ) : (
-              <>
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-                Refresh
-              </>
-            )}
-          </button>
-        </div>
-
-        {/* Show dropdown when profiles are available, text input as fallback */}
-        {profiles.length > 0 ? (
-          <select
-            id="aws-profile"
-            value={awsProfile}
-            onChange={(e) => {
-              setAwsProfile(e.target.value)
-              if (identityStatus === 'verified') clearIdentity()
-            }}
-            disabled={isBusy}
-            aria-label="AWS CLI Profile"
-            className="input max-w-xs bg-navy-900"
-          >
-            {profiles.map((p) => (
-              <option key={p} value={p} className="bg-navy-900 text-slate-100">
-                {p}
-              </option>
-            ))}
-            {/* Allow entering a profile not in the list */}
-            {!profiles.includes(awsProfile) && awsProfile && (
-              <option value={awsProfile} className="bg-navy-900 text-slate-100">
-                {awsProfile} (custom)
-              </option>
-            )}
-          </select>
-        ) : (
-          <input
-            id="aws-profile"
-            type="text"
-            value={awsProfile}
-            onChange={(e) => {
-              setAwsProfile(e.target.value)
-              if (identityStatus === 'verified') clearIdentity()
-            }}
-            placeholder="default"
-            className="input max-w-xs"
-            disabled={isBusy}
-            aria-label="AWS CLI Profile"
-          />
-        )}
-
-        {/* Profile discovery error */}
-        {profilesError && (
-          <p className="mt-1 text-xs text-yellow-400">
-            ⚠ Could not load profiles: {profilesError}. Enter a profile name manually.
-          </p>
-        )}
-
-        <p className="mt-1 text-xs text-slate-600">
-          Credentials are resolved via the Boto3 credential chain — never entered here.
-          Run <code className="font-mono text-slate-500">aws sso login --profile {awsProfile || 'default'}</code> to authenticate.
-        </p>
+      {/* Security notice */}
+      <div className="rounded-lg border border-amber-500/20 bg-amber-950/10 px-4 py-3 text-xs text-amber-300/80">
+        <strong className="text-amber-300">Local testing only.</strong>{' '}
+        Credentials are sent to the local backend only, used for this scan only, and never stored.
+        Use a dedicated IAM identity with the minimum read-only permissions listed in{' '}
+        <code className="font-mono">docs/iam-policy.json</code>.
+        AWS IAM policies enforce read-only access — this form does not.
       </div>
 
-      {/* Stale identity warning */}
-      {isStale && (
-        <div className="rounded-lg border border-yellow-500/30 bg-yellow-950/20 px-4 py-3">
-          <p className="text-xs text-yellow-300 flex items-center gap-2">
-            <svg className="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
-              <path fillRule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clipRule="evenodd" />
-            </svg>
-            Profile or region changed — re-verify identity before scanning.
+      {/* Access Key ID */}
+      <div>
+        <label htmlFor="aws-key-id" className="block text-sm text-slate-400 mb-1.5">
+          AWS Access Key ID <span className="text-red-400">*</span>
+        </label>
+        <input
+          id="aws-key-id"
+          type="text"
+          value={creds.accessKeyId}
+          onChange={(e) => onChange({ ...creds, accessKeyId: e.target.value })}
+          placeholder="AKIA… or ASIA…"
+          className="input max-w-xs font-mono text-sm"
+          disabled={disabled}
+          autoComplete="off"
+          spellCheck={false}
+          aria-describedby="key-id-hint"
+        />
+        {creds.accessKeyId && !keyIdValid && (
+          <p id="key-id-hint" className="mt-1 text-xs text-red-400">
+            Access Key ID must start with AKIA or ASIA and be 20 characters.
           </p>
+        )}
+      </div>
+
+      {/* Secret Access Key */}
+      <div>
+        <label htmlFor="aws-secret" className="block text-sm text-slate-400 mb-1.5">
+          AWS Secret Access Key <span className="text-red-400">*</span>
+        </label>
+        <div className="flex items-center gap-2 max-w-xs">
+          <input
+            id="aws-secret"
+            type={showSecret ? 'text' : 'password'}
+            value={creds.secretAccessKey}
+            onChange={(e) => onChange({ ...creds, secretAccessKey: e.target.value })}
+            placeholder="Secret key"
+            className="input flex-1 font-mono text-sm"
+            disabled={disabled}
+            autoComplete="new-password"
+            spellCheck={false}
+          />
+          <button
+            type="button"
+            onClick={() => setShowSecret((v) => !v)}
+            disabled={disabled}
+            className="btn-ghost text-xs py-2 px-2 shrink-0"
+            aria-label={showSecret ? 'Hide secret key' : 'Show secret key'}
+          >
+            {showSecret ? '🙈' : '👁'}
+          </button>
         </div>
-      )}
+      </div>
+
+      {/* Session Token (optional) */}
+      <div>
+        <label htmlFor="aws-token" className="block text-sm text-slate-400 mb-1.5">
+          AWS Session Token <span className="text-slate-600">(optional — required for temporary credentials)</span>
+        </label>
+        <div className="flex items-center gap-2 max-w-sm">
+          <input
+            id="aws-token"
+            type={showToken ? 'text' : 'password'}
+            value={creds.sessionToken}
+            onChange={(e) => onChange({ ...creds, sessionToken: e.target.value })}
+            placeholder="Session token (if using STS / SSO temporary credentials)"
+            className="input flex-1 font-mono text-sm"
+            disabled={disabled}
+            autoComplete="new-password"
+            spellCheck={false}
+          />
+          <button
+            type="button"
+            onClick={() => setShowToken((v) => !v)}
+            disabled={disabled}
+            className="btn-ghost text-xs py-2 px-2 shrink-0"
+            aria-label={showToken ? 'Hide session token' : 'Show session token'}
+          >
+            {showToken ? '🙈' : '👁'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Sub-component: identity verification panel
+// Sub-component: identity verification panel (credential-aware)
 // ---------------------------------------------------------------------------
 
-function IdentityVerificationPanel() {
+function IdentityVerificationPanel({ creds }: { creds: ExplicitCreds }) {
   const {
     identityStatus, identityInfo, identityError, identityErrorCode,
-    awsProfile,
     checkIdentity,
     status,
   } = useScanStore()
@@ -331,31 +339,32 @@ function IdentityVerificationPanel() {
 
   const isBusy = status === 'scanning' || identityStatus === 'checking'
 
-  // Render an actionable error message based on the structured error code
+  const hasExplicitCreds = creds.accessKeyId.trim() !== '' && creds.secretAccessKey.trim() !== ''
+
+  function handleVerify() {
+    if (hasExplicitCreds) {
+      checkIdentity({
+        accessKeyId: creds.accessKeyId.trim(),
+        secretAccessKey: creds.secretAccessKey.trim(),
+        sessionToken: creds.sessionToken.trim() || undefined,
+      })
+    } else {
+      checkIdentity()
+    }
+  }
+
   function renderIdentityError() {
     if (!identityError) return null
     const codeStyle = 'font-mono text-xs bg-navy-900/50 rounded px-1 py-0.5'
     switch (identityErrorCode) {
-      case 'SESSION_EXPIRED':
+      case 'INSUFFICIENT_PERMISSIONS':
         return (
           <>
-            <p className="text-sm font-semibold text-red-300">Authentication Failed — SSO Session Expired</p>
-            <p className="mt-1 text-sm text-red-400/80">Your AWS SSO session has expired.</p>
-            <p className="mt-2 text-xs text-red-400/60">
-              Run <code className={codeStyle}>aws sso login --profile {awsProfile}</code> then try again.
-            </p>
-          </>
-        )
-      case 'NO_CREDENTIALS':
-        return (
-          <>
-            <p className="text-sm font-semibold text-red-300">No Credentials Found</p>
+            <p className="text-sm font-semibold text-red-300">Permission Denied</p>
             <p className="mt-1 text-sm text-red-400/80">
-              Profile <code className={codeStyle}>{awsProfile}</code> has no credentials configured.
-            </p>
-            <p className="mt-2 text-xs text-red-400/60">
-              Run <code className={codeStyle}>aws configure --profile {awsProfile}</code> or{' '}
-              <code className={codeStyle}>aws sso login --profile {awsProfile}</code> then try again.
+              <code className={codeStyle}>sts:GetCallerIdentity</code> was denied.
+              Ensure the IAM identity has the required read-only permissions from{' '}
+              <code className={codeStyle}>docs/iam-policy.json</code>.
             </p>
           </>
         )
@@ -368,35 +377,16 @@ function IdentityVerificationPanel() {
             </p>
           </>
         )
-      case 'INVALID_PROFILE':
-        return (
-          <>
-            <p className="text-sm font-semibold text-red-300">Invalid Profile Name</p>
-            <p className="mt-1 text-sm text-red-400/80">
-              Profile <code className={codeStyle}>{awsProfile}</code> contains invalid characters
-              and cannot be used. Select a valid AWS CLI profile from the dropdown.
-            </p>
-          </>
-        )
-      case 'INSUFFICIENT_PERMISSIONS':
-        return (
-          <>
-            <p className="text-sm font-semibold text-red-300">Permission Denied</p>
-            <p className="mt-1 text-sm text-red-400/80">
-              Profile <code className={codeStyle}>{awsProfile}</code> does not have{' '}
-              <code className={codeStyle}>sts:GetCallerIdentity</code> permission. Check IAM permissions.
-            </p>
-          </>
-        )
       default:
-        // Forward-compatible fallback for any future error codes
         return (
           <>
             <p className="text-sm font-semibold text-red-300">Authentication Failed</p>
             <p className="mt-1 text-sm text-red-400/80">{identityError}</p>
-            <p className="mt-2 text-xs text-red-400/60">
-              Run <code className={codeStyle}>aws sso login --profile {awsProfile}</code> then try again.
-            </p>
+            {!hasExplicitCreds && (
+              <p className="mt-2 text-xs text-red-400/60">
+                Check that your credentials are correct and not expired.
+              </p>
+            )}
           </>
         )
     }
@@ -404,13 +394,13 @@ function IdentityVerificationPanel() {
 
   return (
     <div className="space-y-3">
-      {/* Verify button — hidden when already verified for current settings */}
       {!isIdentityValid && (
         <button
-          onClick={checkIdentity}
-          disabled={isBusy}
+          onClick={handleVerify}
+          disabled={isBusy || (!hasExplicitCreds)}
           className="btn-secondary"
           aria-label="Verify AWS identity"
+          title={!hasExplicitCreds ? 'Enter Access Key ID and Secret Access Key first' : undefined}
         >
           {identityStatus === 'checking' ? (
             <>
@@ -422,27 +412,23 @@ function IdentityVerificationPanel() {
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
               </svg>
-              Verify AWS Identity
+              Verify Identity
             </>
           )}
         </button>
       )}
 
-      {/* Identity error — rendered with per-code actionable messages */}
       {identityStatus === 'error' && identityError && (
         <div className="rounded-lg border border-red-500/30 bg-red-950/20 p-4">
           <div className="flex items-start gap-3">
             <svg className="w-5 h-5 text-red-400 shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
               <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.28 7.22a.75.75 0 00-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 101.06 1.06L10 11.06l1.72 1.72a.75.75 0 101.06-1.06L11.06 10l1.72-1.72a.75.75 0 00-1.06-1.06L10 8.94 8.28 7.22z" clipRule="evenodd" />
             </svg>
-            <div>
-              {renderIdentityError()}
-            </div>
+            <div>{renderIdentityError()}</div>
           </div>
         </div>
       )}
 
-      {/* Verified identity card */}
       {isIdentityValid && identityInfo && (
         <div className="rounded-lg border border-green-500/30 bg-green-950/15 p-4">
           <div className="flex items-start gap-3">
@@ -482,24 +468,106 @@ function IdentityVerificationPanel() {
 export function ScanPage() {
   const {
     status, scanResult, error, lastScanAt,
-    selectedMode,
-    awsRegion,
+    selectedMode, liveModeAvailable, identityStatus,
     triggerScan, clearError, setMode,
-    loadProfiles,
+    clearIdentity,
   } = useScanStore()
 
-  // Load profiles when switching to Live mode
+  // Credential form state — lives here only, never in Zustand, never persisted
+  const [creds, setCreds] = useState<ExplicitCreds>({
+    accessKeyId: '',
+    secretAccessKey: '',
+    sessionToken: '',
+  })
+
+  // Track which credentials were verified — local component state only.
+  // When the user changes credentials after verification, handleCredsChange
+  // calls clearIdentity() which nullifies verifiedFor in the store.
+  // This local state is compared in handleScan to ensure the scan uses
+  // the exact same credentials that passed identity verification.
+  const [verifiedCreds, setVerifiedCreds] = useState<ExplicitCreds | null>(null)
+
+  // Clear credentials and identity state after scan completes or fails
   useEffect(() => {
-    if (selectedMode === 'live') {
-      loadProfiles()
+    if (status === 'complete' || status === 'error') {
+      setCreds({ accessKeyId: '', secretAccessKey: '', sessionToken: '' })
+      setVerifiedCreds(null)
     }
-  }, [selectedMode]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [status])
+
+  // When identity verification succeeds, record the exact credentials that
+  // were verified. This enables the handleScan function to verify that the
+  // scan uses the same credentials that passed verification.
+  useEffect(() => {
+    if (identityStatus === 'verified' && hasExplicitCreds) {
+      setVerifiedCreds({
+        accessKeyId: creds.accessKeyId.trim(),
+        secretAccessKey: creds.secretAccessKey.trim(),
+        sessionToken: creds.sessionToken.trim(),
+      })
+    }
+  }, [identityStatus]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Clear credentials when the Scan page unmounts.
+  // Uses a ref to avoid setting state after unmount.
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      // Local state (creds, verifiedCreds) is garbage-collected with the
+      // component — no explicit reset is needed or safe here, since calling
+      // React state setters during unmount triggers "Can't perform a React
+      // state update on an unmounted component" warnings.
+    }
+  }, [])
+
+  // When credentials change, invalidate any existing identity verification
+  // so the user must re-verify before scanning with the new credentials.
+  // If verification is in progress, prevent credential changes to avoid
+  // a race condition where stale credentials get verified.
+  function handleCredsChange(newCreds: ExplicitCreds) {
+    // Don't allow credential changes while identity verification is in progress
+    if (identityStatus === 'checking') return
+    setCreds(newCreds)
+    clearIdentity()
+  }
 
   const isIdentityValid = selectIsIdentityCurrentlyValid(useScanStore.getState())
   const totalFindings = scanResult?.findings.length ?? 0
   const isLiveResult = scanResult !== null && !scanResult.simulated
-  const canScanLive = selectedMode === 'live' && isIdentityValid
+  const hasExplicitCreds = creds.accessKeyId.trim() !== '' && creds.secretAccessKey.trim() !== ''
+  const canScanLive = selectedMode === 'live' && isIdentityValid && hasExplicitCreds
   const isBusy = status === 'scanning'
+
+  function handleScan() {
+    if (selectedMode === 'live' && hasExplicitCreds) {
+      // Defense-in-depth: the scan must only proceed if we have a local record
+      // of verified credentials that exactly match the current form values.
+      // Two cases that MUST block the scan:
+      //   1. verifiedCreds is null  — credentials were never verified (or were
+      //      cleared by handleCredsChange), so we have no proof of identity.
+      //   2. Any field differs      — user edited credentials since verification;
+      //      the store's verifiedFor may already be null due to clearIdentity(),
+      //      but we enforce here as an additional safety layer.
+      if (
+        verifiedCreds === null ||
+        verifiedCreds.accessKeyId !== creds.accessKeyId.trim() ||
+        verifiedCreds.secretAccessKey !== creds.secretAccessKey.trim() ||
+        verifiedCreds.sessionToken !== (creds.sessionToken.trim() || '')
+      ) {
+        // No verified credentials or mismatch — do not scan
+        return
+      }
+      triggerScan(undefined, {
+        accessKeyId: creds.accessKeyId.trim(),
+        secretAccessKey: creds.secretAccessKey.trim(),
+        sessionToken: creds.sessionToken.trim() || undefined,
+      })
+    } else {
+      triggerScan()
+    }
+  }
 
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-6">
@@ -519,6 +587,7 @@ export function ScanPage() {
             selected={selectedMode}
             onChange={setMode}
             disabled={isBusy}
+            liveModeAvailable={liveModeAvailable}
           />
         </div>
 
@@ -539,7 +608,7 @@ export function ScanPage() {
             </div>
           </div>
         ) : (
-          /* Live mode: profile selector + identity panel */
+          /* Live mode: credential form + identity panel */
           <div className="space-y-4">
             <div className="rounded-lg border border-blue-500/20 bg-blue-950/10 p-4">
               <div className="flex items-start gap-3">
@@ -550,21 +619,20 @@ export function ScanPage() {
                   <p className="text-sm font-semibold text-blue-300">Live AWS Scanning — Read-Only</p>
                   <p className="mt-1 text-sm text-blue-400/80 leading-relaxed">
                     CloudGuard AI uses read-only AWS permissions only (<code className="font-mono text-xs">s3:List*</code>, <code className="font-mono text-xs">s3:Get*</code>, <code className="font-mono text-xs">ec2:Describe*</code>).
-                    No resources will be created or modified. Credentials are resolved via the
-                    standard Boto3 credential chain — never entered in this interface.
+                    No resources will be created or modified.
                   </p>
                 </div>
               </div>
             </div>
 
-            {/* Phase 4E: Region selection */}
+            {/* Region selection */}
             <RegionModeSelector />
 
-            {/* Profile and identity configuration */}
-            <ProfileSelector />
+            {/* Credential entry */}
+            <CredentialForm creds={creds} onChange={handleCredsChange} disabled={isBusy} />
 
             {/* Identity verification */}
-            <IdentityVerificationPanel />
+            <IdentityVerificationPanel creds={creds} />
           </div>
         )}
       </div>
@@ -577,12 +645,14 @@ export function ScanPage() {
 
         {selectedMode === 'live' && !isIdentityValid && (
           <p className="text-xs text-slate-500">
-            Verify your AWS identity above before running a live scan.
+            {hasExplicitCreds
+              ? 'Verify your AWS identity above before running a live scan.'
+              : 'Enter your AWS credentials above, then verify identity before scanning.'}
           </p>
         )}
 
         <button
-          onClick={() => triggerScan()}
+          onClick={handleScan}
           disabled={isBusy || (selectedMode === 'live' && !canScanLive)}
           aria-disabled={isBusy || (selectedMode === 'live' && !canScanLive)}
           className="btn-primary"
@@ -645,6 +715,10 @@ export function ScanPage() {
               )}
             </div>
           </div>
+          {/* Coverage summary for live scans */}
+          {isLiveResult && scanResult.coverage && (
+            <CoveragePanel coverage={scanResult.coverage} />
+          )}
         </div>
       )}
 

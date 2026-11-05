@@ -38,7 +38,7 @@ Security notes:
 from __future__ import annotations
 
 import logging
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, Optional
 
 import boto3
 import botocore.exceptions
@@ -374,14 +374,91 @@ class Boto3ScannerProvider:
         region APIs are called against the bucket's home region.
     """
 
-    def __init__(self, profile_name: str, region: str = "us-east-1") -> None:
+    def __init__(
+        self,
+        profile_name: str = "default",
+        region: str = "us-east-1",
+        *,
+        access_key_id: Optional[str] = None,
+        secret_access_key: Optional[str] = None,
+        session_token: Optional[str] = None,
+    ) -> None:
         self._profile_name = profile_name
         self._region = region
-        self._session = self._create_session(profile_name)
+        # Determine credential path: explicit keys take priority over profile
+        if access_key_id or secret_access_key:
+            self._session = self._create_session_with_explicit_creds(
+                access_key_id=access_key_id,
+                secret_access_key=secret_access_key,
+                session_token=session_token,
+                region=region,
+            )
+        else:
+            self._session = self._create_session(profile_name)
 
     # ------------------------------------------------------------------
     # Session factory
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _create_session_with_explicit_creds(
+        *,
+        access_key_id: Optional[str],
+        secret_access_key: Optional[str],
+        session_token: Optional[str],
+        region: str,
+    ) -> boto3.Session:
+        """Create a boto3 Session using explicitly supplied credentials.
+
+        Used for the local-testing credential-entry flow. Never falls back
+        to the default AWS credential chain — if the supplied credentials
+        are invalid, the caller receives a structured auth error.
+
+        Security notes:
+          - Credential values are NEVER logged. Log messages use boolean
+            flags (has_key, has_token) instead of values.
+          - session_token is optional; pass None if not needed.
+          - The caller must supply both access_key_id and secret_access_key.
+            Supplying only one raises MissingCredentialsError before any
+            AWS API call is made.
+        """
+        key = (access_key_id or "").strip()
+        secret = (secret_access_key or "").strip()
+
+        if not key:
+            raise MissingCredentialsError(
+                "AWS Access Key ID is required when using explicit credentials."
+            )
+        if not secret:
+            raise MissingCredentialsError(
+                "AWS Secret Access Key is required when using explicit credentials."
+            )
+
+        # Log that explicit creds are being used, without echoing values
+        logger.debug(
+            "Creating boto3 session with explicit credentials "
+            "(has_key=True, has_token=%s)",
+            bool(session_token),
+        )
+
+        try:
+            session = boto3.Session(
+                aws_access_key_id=key,
+                aws_secret_access_key=secret,
+                aws_session_token=(session_token.strip() if session_token else None),
+                region_name=region,
+            )
+            # Eagerly verify credentials object exists (does not call AWS yet)
+            creds = session.get_credentials()
+            if creds is None:
+                raise MissingCredentialsError(
+                    "The supplied credentials could not be resolved by boto3."
+                )
+            return session
+        except botocore.exceptions.NoCredentialsError:
+            raise MissingCredentialsError(
+                "The supplied credentials were not accepted by boto3."
+            )
 
     @staticmethod
     def _create_session(profile_name: str) -> boto3.Session:

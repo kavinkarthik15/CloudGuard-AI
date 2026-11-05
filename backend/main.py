@@ -22,13 +22,14 @@ from __future__ import annotations
 import os
 import traceback
 from collections import OrderedDict
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import FastAPI, Path
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
 from config import (
+    ALLOW_LIVE_AWS_SCANS,
     CORS_ORIGINS,
     DEFAULT_AWS_PROFILE,
     DEFAULT_AWS_REGION,
@@ -36,6 +37,7 @@ from config import (
     get_simulated_provider,
 )
 from models import (
+    BaseModel,
     ErrorResponse,
     IdentityInfo,
     ProfilesResponse,
@@ -121,6 +123,26 @@ def error_response(status_code: int, code: str, message: str) -> JSONResponse:
     )
 
 
+def _require_live_scans_enabled() -> JSONResponse | None:
+    """Return a 403 response if live AWS scanning is disabled, else None.
+
+    Call this at the top of every endpoint that creates a Boto3 session or
+    accepts AWS credentials. Never echoes credentials in the response.
+    """
+    if not ALLOW_LIVE_AWS_SCANS:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "code": "LIVE_AWS_DISABLED",
+                "message": (
+                    "Live AWS scanning is disabled in this deployment. "
+                    "Use Demo Mode to explore the application."
+                ),
+            },
+        )
+    return None
+
+
 def _make_export_response(
     result: ScanResult, fmt: str
 ) -> Response | JSONResponse:
@@ -161,7 +183,7 @@ async def health() -> dict:
         "status": "ok",
         "version": "2.0.0",
         "default_mode": "demo",
-        "live_mode_available": True,
+        "live_mode_available": ALLOW_LIVE_AWS_SCANS,
     }
 
 
@@ -199,10 +221,11 @@ async def list_regions(
         )
 
     # Step 2: optionally enrich with DescribeRegions for enabled status
+    # Only attempted when a profile is supplied AND live scanning is enabled.
     enabled_set: set[str] | None = None
     describe_error: str | None = None
 
-    if profile:
+    if profile and ALLOW_LIVE_AWS_SCANS:
         from providers.boto3_provider import CredentialError
         try:
             from config import get_boto3_provider as _get
@@ -285,8 +308,59 @@ async def get_identity(
     profile: str | None = None,
     region: str | None = None,
 ):
+    """Verify AWS credentials via CLI profile and return caller identity.
+    Never returns credential values. Use POST /api/identity for explicit credentials.
+    """
+    if (guard := _require_live_scans_enabled()) is not None:
+        return guard
+    return await _check_identity(
+        profile=profile,
+        region=region,
+        access_key_id=None,
+        secret_access_key=None,
+        session_token=None,
+    )
+
+
+class IdentityRequest(BaseModel):
+    """Request body for POST /api/identity with explicit credentials.
+    Credential fields are request-scoped and never persisted or logged.
+    """
+    region: str = "us-east-1"
+    # Profile-based (legacy)
+    aws_profile: Optional[str] = None
+    # Explicit credentials (local testing)
+    aws_access_key_id: Optional[str] = None
+    aws_secret_access_key: Optional[str] = None
+    aws_session_token: Optional[str] = None
+
+
+@app.post("/api/identity")
+async def post_identity(request: IdentityRequest):
+    """Verify AWS identity using explicit credentials.
+    Accepts explicit credentials in the request body.
+    Credential values are never returned, logged, or persisted.
+    """
+    if (guard := _require_live_scans_enabled()) is not None:
+        return guard
+    return await _check_identity(
+        profile=request.aws_profile,
+        region=request.region,
+        access_key_id=request.aws_access_key_id,
+        secret_access_key=request.aws_secret_access_key,
+        session_token=request.aws_session_token,
+    )
+
+
+async def _check_identity(
+    profile: str | None,
+    region: str | None,
+    access_key_id: str | None,
+    secret_access_key: str | None,
+    session_token: str | None,
+):
     """Verify AWS credentials and return caller identity metadata.
-    Never returns credential values.
+    Never returns credential values. Credential fields are request-scoped only.
 
     Error codes returned:
       SESSION_EXPIRED (401) — SSO/token session has expired
@@ -306,11 +380,21 @@ async def get_identity(
 
     resolved_profile = profile or DEFAULT_AWS_PROFILE
     resolved_region = region or DEFAULT_AWS_REGION
+    using_explicit = bool(access_key_id or secret_access_key)
+
+    # Descriptive auth hint — never include credential values
+    def _auth_hint() -> str:
+        if using_explicit:
+            return "Check that your Access Key ID and Secret Access Key are correct."
+        return f"Run: aws sso login --profile {resolved_profile}"
 
     try:
         provider = get_boto3_provider(
             profile=resolved_profile,
             region=resolved_region,
+            access_key_id=access_key_id,
+            secret_access_key=secret_access_key,
+            session_token=session_token,
         )
         identity = provider.get_caller_identity()
         return IdentityInfo(
@@ -318,47 +402,45 @@ async def get_identity(
             arn=identity["arn"],
             user_id=identity["user_id"],
             region=resolved_region,
-            profile=resolved_profile,
+            profile=None if using_explicit else resolved_profile,
         )
     # ── CloudGuard domain exceptions (primary path) ──────────────────────
-    except InvalidProfileError as exc:
+    except InvalidProfileError:
         return error_response(
             400, "INVALID_PROFILE",
-            f"Invalid profile name: {exc}",
+            "The provided profile name contains invalid characters.",
         )
     except SessionExpiredError:
         return error_response(
             401, "SESSION_EXPIRED",
-            f"AWS SSO session expired. Run: aws sso login --profile {resolved_profile}",
+            f"Authentication failed or session expired. {_auth_hint()}",
         )
     except MissingCredentialsError:
         return error_response(
             401, "NO_CREDENTIALS",
-            f"No credentials found for profile '{resolved_profile}'. "
-            f"Run: aws configure --profile {resolved_profile}",
+            f"No valid AWS credentials were provided. {_auth_hint()}",
         )
     except InsufficientPermissionsError:
         return error_response(
             403, "INSUFFICIENT_PERMISSIONS",
-            f"sts:GetCallerIdentity was denied for profile '{resolved_profile}'. "
-            "Check IAM permissions.",
+            "sts:GetCallerIdentity was denied. Check IAM permissions.",
         )
     except NetworkError:
         return error_response(
             503, "NETWORK_ERROR",
             "Could not reach AWS. Check internet connectivity and try again.",
         )
-    except CredentialError as exc:
+    except CredentialError:
         # Catch-all for any CredentialError sub-type not matched above
-        return error_response(401, "NO_CREDENTIALS", str(exc))
+        return error_response(
+            401, "NO_CREDENTIALS",
+            f"AWS authentication failed. {_auth_hint()}",
+        )
     # ── Raw botocore exceptions (defence-in-depth) ────────────────────────
-    # Handles cases where botocore exceptions escape the provider boundary,
-    # e.g. in mocked tests or alternative provider implementations.
     except (_botocore_exc.NoCredentialsError, _botocore_exc.PartialCredentialsError):
         return error_response(
             401, "NO_CREDENTIALS",
-            f"No credentials found for profile '{resolved_profile}'. "
-            f"Run: aws configure --profile {resolved_profile}",
+            f"No valid credentials. {_auth_hint()}",
         )
     except (
         _botocore_exc.TokenRetrievalError,
@@ -414,6 +496,8 @@ async def trigger_scan(request: ScanRequest) -> ScanResult:
     if request.mode == ScanMode.demo:
         return await _run_demo_scan(request)
     else:
+        if (guard := _require_live_scans_enabled()) is not None:
+            return guard
         return await _run_live_scan(request)
 
 
@@ -470,14 +554,23 @@ async def _run_live_scan(request: ScanRequest) -> ScanResult | JSONResponse:
                                       f"Invalid region '{r}': {exc}")
 
     # --- Identity pre-check: must succeed before any scan work ---
+    using_explicit = bool(
+        request.aws_access_key_id or request.aws_secret_access_key
+    )
     try:
-        provider = get_boto3_provider(profile=resolved_profile, region=resolved_region)
+        provider = get_boto3_provider(
+            profile=resolved_profile,
+            region=resolved_region,
+            access_key_id=request.aws_access_key_id,
+            secret_access_key=request.aws_secret_access_key,
+            session_token=request.aws_session_token,
+        )
         identity = provider.get_caller_identity()
     # ── CloudGuard domain exceptions (primary path) ──────────────────────
-    except InvalidProfileError as exc:
+    except InvalidProfileError:
         return error_response(
             400, "INVALID_PROFILE",
-            f"Invalid profile name: {exc}",
+            "The provided profile name contains invalid characters.",
         )
     except SessionExpiredError:
         return error_response(
@@ -487,18 +580,23 @@ async def _run_live_scan(request: ScanRequest) -> ScanResult | JSONResponse:
     except MissingCredentialsError:
         return error_response(
             401, "NO_CREDENTIALS",
-            f"No credentials found for profile '{resolved_profile}'. "
-            f"Run: aws configure --profile {resolved_profile}",
+            "No valid AWS credentials were provided.",
         )
-    except InsufficientPermissionsError as exc:
-        return error_response(403, "INSUFFICIENT_PERMISSIONS", str(exc))
+    except InsufficientPermissionsError:
+        return error_response(
+            403, "INSUFFICIENT_PERMISSIONS",
+            "sts:GetCallerIdentity was denied. Check IAM permissions.",
+        )
     except NetworkError:
         return error_response(
             503, "NETWORK_ERROR",
             "Could not reach AWS. Check internet connectivity and try again.",
         )
-    except CredentialError as exc:
-        return error_response(401, "NO_CREDENTIALS", str(exc))
+    except CredentialError:
+        return error_response(
+            401, "NO_CREDENTIALS",
+            "AWS authentication failed. Check your credentials and try again.",
+        )
     # ── Raw botocore exceptions (defence-in-depth) ────────────────────────
     except (_botocore_exc.NoCredentialsError, _botocore_exc.PartialCredentialsError):
         return error_response(
@@ -541,16 +639,18 @@ async def _run_live_scan(request: ScanRequest) -> ScanResult | JSONResponse:
         )
         _store_scan_result(result)
         return result
-    except InsufficientPermissionsError as exc:
-        return error_response(403, "INSUFFICIENT_PERMISSIONS", str(exc))
+    except InsufficientPermissionsError:
+        return error_response(403, "INSUFFICIENT_PERMISSIONS",
+                              "A required AWS permission was denied during the scan.")
     except SessionExpiredError:
         # Token can expire mid-scan for long-running scans
         return error_response(
             401, "SESSION_EXPIRED",
             f"AWS SSO session expired during scan. Run: aws sso login --profile {resolved_profile}",
         )
-    except CredentialError as exc:
-        return error_response(401, "SESSION_EXPIRED", str(exc))
+    except CredentialError:
+        return error_response(401, "SESSION_EXPIRED",
+                              "AWS authentication failed during the scan.")
     except NetworkError:
         return error_response(
             503, "NETWORK_ERROR",

@@ -42,6 +42,7 @@ def generate_json_report(result: ScanResult) -> bytes:
         "aws_account_id": data.get("aws_account_id"),
         "aws_identity_arn": data.get("aws_identity_arn"),
         "summary": data["summary"],
+        "coverage": data.get("coverage"),      # scan coverage — None for old scans
         "findings": data["findings"],
         "warnings": data["warnings"],
     }

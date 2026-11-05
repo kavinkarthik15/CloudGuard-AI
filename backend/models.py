@@ -165,15 +165,31 @@ class ScanCoverage(BaseModel):
     """Coverage metadata for Phase 4D/4E — what was requested vs actually scanned.
 
     All fields are optional so existing clients that don't use coverage are unaffected.
+
+    S3 fields track bucket-level coverage globally (S3 is a global service).
+    EC2 fields track security-group-level coverage per the scanned region(s).
+
+    Semantics:
+      *_discovered — count of resources returned by the AWS list/describe API.
+      *_evaluated  — count of resources that completed rule analysis without error.
+      *_failed     — count of resources where the rule analyzer raised an exception.
+
+    A resource is only counted as evaluated if its analyzer completed successfully.
+    A resource where attribute fetches partially failed (producing warnings) is still
+    counted as evaluated, because the rules engine ran against it and produced findings.
     """
     # EC2 multi-region coverage
     requested_regions: list[str] = Field(default_factory=list)
     scanned_regions: list[str] = Field(default_factory=list)
     failed_regions: list[str] = Field(default_factory=list)
-    # S3 coverage
+    # S3 coverage (global — not region-specific)
     s3_buckets_requested: int = 0
     s3_buckets_scanned: int = 0
     s3_buckets_failed: int = 0
+    # EC2 security group coverage (per the selected region(s))
+    ec2_sgs_discovered: int = 0
+    ec2_sgs_evaluated: int = 0
+    ec2_sgs_failed: int = 0
 
 
 class ScanResult(BaseModel):
@@ -220,10 +236,14 @@ class ScanRequest(BaseModel):
     # All-enabled mode: set regions=["ALL_ENABLED"].
     regions: Optional[list[str]] = None
     mode: ScanMode = ScanMode.demo
+    # Profile-based auth (legacy / backward compat)
     aws_profile: Optional[str] = None
-    # Optional profile override for live mode. Defaults to AWS_PROFILE env var
-    # or the standard 'default' profile if neither is set. Ignored for demo mode.
-    # Never persisted or logged by the backend.
+    # Explicit credential auth (local testing path).
+    # Credentials are request-scoped: used only for this scan and never persisted.
+    # Backend never logs these values. They are excluded from all response bodies.
+    aws_access_key_id: Optional[str] = None
+    aws_secret_access_key: Optional[str] = None
+    aws_session_token: Optional[str] = None  # required for temporary credentials
 
 
 class IdentityInfo(BaseModel):

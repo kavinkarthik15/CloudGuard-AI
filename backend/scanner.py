@@ -23,6 +23,7 @@ Phase 4E: Scanner accepts a `regions` list for multi-region EC2 scanning.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -30,6 +31,8 @@ from analyzers.ec2_rules import analyze_security_group
 from analyzers.s3_rules import analyze_s3_bucket
 from models import SEVERITY_ORDER, Finding, ScanCoverage, ScanResult, Warning
 from providers.base import ScannerProvider
+
+logger = logging.getLogger(__name__)
 
 # Text substituted in risk_explanation when findings come from live AWS data.
 # The S1 analyzers embed this prefix; for live scans it must be replaced.
@@ -98,6 +101,7 @@ class Scanner:
         try:
             buckets = self._provider.list_s3_buckets()
             s3_buckets_requested = len(buckets)
+            logger.info("S3: discovered %d bucket(s)", s3_buckets_requested)
         except RuntimeError as exc:
             all_warnings.append(Warning(
                 resource_id="s3:all-buckets",
@@ -133,6 +137,9 @@ class Scanner:
         requested_regions: list[str] = []
         scanned_regions: list[str] = []
         failed_regions: list[str] = []
+        ec2_sgs_discovered = 0
+        ec2_sgs_evaluated = 0
+        ec2_sgs_failed = 0
 
         # Determine effective region list
         effective_regions = regions if regions else [region]
@@ -147,6 +154,9 @@ class Scanner:
             try:
                 security_groups = self._provider.list_security_groups(scan_region)
                 scanned_regions = [scan_region]
+                ec2_sgs_discovered = len(security_groups)
+                logger.info("EC2: discovered %d security group(s) in %s",
+                            ec2_sgs_discovered, scan_region)
             except RuntimeError as exc:
                 all_warnings.append(Warning(
                     resource_id="ec2:all-security-groups",
@@ -167,7 +177,9 @@ class Scanner:
                         enriched_evidence.setdefault("region", sg.region)
                         enriched.append(f.model_copy(update={"evidence": enriched_evidence}))
                     all_findings.extend(enriched)
+                    ec2_sgs_evaluated += 1
                 except Exception as exc:
+                    ec2_sgs_failed += 1
                     all_warnings.append(Warning(
                         resource_id=f"ec2:{sg.group_id}",
                         reason=f"Error analyzing security group '{sg.group_id}': {exc}",
@@ -178,6 +190,7 @@ class Scanner:
             try:
                 security_groups, provider_scanned, regional_warnings = _multi_fn(effective_regions)
                 all_warnings.extend(regional_warnings)
+                ec2_sgs_discovered = len(security_groups)
                 # scanned_regions comes from the provider's explicit tracking —
                 # includes regions that returned zero SGs (empty ≠ failed).
                 scanned_regions = list(provider_scanned)
@@ -216,7 +229,9 @@ class Scanner:
                         enriched_evidence.setdefault("region", sg.region)
                         enriched.append(f.model_copy(update={"evidence": enriched_evidence}))
                     all_findings.extend(enriched)
+                    ec2_sgs_evaluated += 1
                 except Exception as exc:
+                    ec2_sgs_failed += 1
                     all_warnings.append(Warning(
                         resource_id=f"ec2:{sg.group_id}",
                         reason=f"Error analyzing security group '{sg.group_id}': {exc}",
@@ -227,6 +242,7 @@ class Scanner:
             try:
                 security_groups = self._provider.list_security_groups(scan_region)
                 scanned_regions = [scan_region]
+                ec2_sgs_discovered = len(security_groups)
             except RuntimeError as exc:
                 all_warnings.append(Warning(
                     resource_id="ec2:all-security-groups",
@@ -241,7 +257,9 @@ class Scanner:
                     if not simulated:
                         findings = [_rewrite_finding_for_live(f) for f in findings]
                     all_findings.extend(findings)
+                    ec2_sgs_evaluated += 1
                 except Exception as exc:
+                    ec2_sgs_failed += 1
                     all_warnings.append(Warning(
                         resource_id=f"ec2:{sg.group_id}",
                         reason=f"Error analyzing security group '{sg.group_id}': {exc}",
@@ -260,6 +278,9 @@ class Scanner:
             s3_buckets_requested=s3_buckets_requested,
             s3_buckets_scanned=s3_buckets_scanned,
             s3_buckets_failed=s3_buckets_failed,
+            ec2_sgs_discovered=ec2_sgs_discovered,
+            ec2_sgs_evaluated=ec2_sgs_evaluated,
+            ec2_sgs_failed=ec2_sgs_failed,
         )
 
         return ScanResult(

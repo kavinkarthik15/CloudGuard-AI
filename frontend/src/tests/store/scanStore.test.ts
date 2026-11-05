@@ -81,7 +81,7 @@ describe('setMode', () => {
       selectedMode: 'live',
       identityStatus: 'verified',
       identityInfo: mockIdentity(),
-      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1' },
+      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1', verificationGen: 1 },
     })
     act(() => useScanStore.getState().setMode('demo'))
     expect(useScanStore.getState().identityStatus).toBe('idle')
@@ -107,7 +107,7 @@ describe('setAwsProfile', () => {
       awsRegion: 'eu-north-1',
       identityStatus: 'verified',
       identityInfo: mockIdentity('cloudguard'),
-      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1' },
+      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1', verificationGen: 1 },
     })
 
     act(() => useScanStore.getState().setAwsProfile('staging'))
@@ -123,7 +123,7 @@ describe('setAwsProfile', () => {
       awsProfile: 'cloudguard',
       identityStatus: 'verified',
       identityInfo: mockIdentity('cloudguard'),
-      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1' },
+      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1', verificationGen: 1 },
     })
 
     act(() => useScanStore.getState().setAwsProfile('cloudguard'))
@@ -141,7 +141,7 @@ describe('setAwsRegion', () => {
       awsRegion: 'eu-north-1',
       identityStatus: 'verified',
       identityInfo: mockIdentity('cloudguard', 'eu-north-1'),
-      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1' },
+      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1', verificationGen: 1 },
     })
 
     act(() => useScanStore.getState().setAwsRegion('us-east-1'))
@@ -157,7 +157,7 @@ describe('setAwsRegion', () => {
       awsRegion: 'eu-north-1',
       identityStatus: 'verified',
       identityInfo: mockIdentity('cloudguard', 'eu-north-1'),
-      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1' },
+      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1', verificationGen: 1 },
     })
 
     act(() => useScanStore.getState().setAwsRegion('eu-north-1'))
@@ -175,7 +175,7 @@ describe('selectIsIdentityCurrentlyValid', () => {
     useScanStore.setState({
       identityStatus: 'verified',
       identityInfo: mockIdentity(),
-      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1' },
+      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1', verificationGen: 1 },
       awsProfile: 'cloudguard',
       awsRegion: 'eu-north-1',
     })
@@ -186,7 +186,7 @@ describe('selectIsIdentityCurrentlyValid', () => {
     useScanStore.setState({
       identityStatus: 'verified',
       identityInfo: mockIdentity('cloudguard'),
-      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1' },
+      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1', verificationGen: 1 },
       awsProfile: 'staging',          // profile changed
       awsRegion: 'eu-north-1',
     })
@@ -197,7 +197,7 @@ describe('selectIsIdentityCurrentlyValid', () => {
     useScanStore.setState({
       identityStatus: 'verified',
       identityInfo: mockIdentity(),
-      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1' },
+      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1', verificationGen: 1 },
       awsProfile: 'cloudguard',
       awsRegion: 'us-east-1',          // region changed
     })
@@ -218,7 +218,7 @@ describe('selectIsIdentityCurrentlyValid', () => {
   it('returns false when identityStatus is not verified', () => {
     useScanStore.setState({
       identityStatus: 'checking',
-      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1' },
+      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1', verificationGen: 1 },
       awsProfile: 'cloudguard',
       awsRegion: 'eu-north-1',
     })
@@ -311,7 +311,7 @@ describe('checkIdentity', () => {
     expect(state.identityStatus).toBe('verified')
     expect(state.identityInfo?.account_id).toBe('123456789012')
     expect(state.identityError).toBeNull()
-    expect(state.verifiedFor).toEqual({ profile: 'cloudguard', region: 'eu-north-1' })
+    expect(state.verifiedFor).toEqual({ profile: 'cloudguard', region: 'eu-north-1', verificationGen: expect.any(Number) })
   })
 
   it('transitions through checking → error on auth failure', async () => {
@@ -351,7 +351,7 @@ describe('clearIdentity', () => {
       identityStatus: 'verified',
       identityInfo: mockIdentity(),
       identityError: null,
-      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1' },
+      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1', verificationGen: 1 },
     })
     act(() => useScanStore.getState().clearIdentity())
     const state = useScanStore.getState()
@@ -388,7 +388,7 @@ describe('triggerScan', () => {
       selectedMode: 'live',
       awsProfile: 'cloudguard',
       awsRegion: 'eu-north-1',
-      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1' },
+      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1', verificationGen: 1 },
       identityStatus: 'verified',
     })
     await act(async () => { await useScanStore.getState().triggerScan() })
@@ -424,7 +424,7 @@ describe('triggerScan', () => {
     act(() => useScanStore.getState().setMode('live'))
     // Set verifiedFor so the pre-check passes, but scan still fails
     useScanStore.setState({
-      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1' },
+      verifiedFor: { profile: 'cloudguard', region: 'eu-north-1', verificationGen: 1 },
       awsProfile: 'cloudguard',
       awsRegion: 'eu-north-1',
       identityStatus: 'verified',

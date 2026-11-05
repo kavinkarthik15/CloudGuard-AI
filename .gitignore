@@ -26,3 +26,14 @@ Thumbs.db
 .kiro/settings/mcp.json
 # macOS metadata directories created when extracting ZIP archives on macOS
 __MACOSX/
+# Local AI agent and testing artifacts
+.agents/
+
+# Separate AWS starter kit - not part of CloudGuard AI
+aws-starter-kit/
+
+# Local test output
+backend/pytest_out.txt
+frontend/vitest_out.txt
+# Outdated local phase report
+PHASE_4C_FINAL_REPORT.md

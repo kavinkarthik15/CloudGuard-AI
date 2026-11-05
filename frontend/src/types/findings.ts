@@ -151,6 +151,12 @@ export interface ScanCoverage {
   s3_buckets_requested: number
   s3_buckets_scanned: number
   s3_buckets_failed: number
+  /** Number of EC2 security groups returned by DescribeSecurityGroups. */
+  ec2_sgs_discovered: number
+  /** Number of security groups successfully processed by the rules engine. */
+  ec2_sgs_evaluated: number
+  /** Number of security groups where rule analysis threw an exception. */
+  ec2_sgs_failed: number
 }
 
 export interface ScanResult {
@@ -180,17 +186,34 @@ export interface ScanRequest {
   regions?: string[]
   /** Must be sent explicitly on every request. No implicit default in the client. */
   mode: ScanMode
-  /** AWS CLI profile name for live scans. Defaults to the backend's configured profile (AWS_PROFILE env var or 'default'). */
+  /** AWS CLI profile name for live scans. Defaults to the backend's configured profile. */
   aws_profile?: string
+  /**
+   * Explicit credentials for the local-testing flow.
+   * Kept in transient component state only — never in Zustand or browser storage.
+   * Values are never included in scan results, exports, or error messages.
+   */
+  aws_access_key_id?: string
+  aws_secret_access_key?: string
+  aws_session_token?: string
 }
 
-/** AWS caller identity returned by GET /api/identity — no credentials included. */
+/** AWS caller identity returned by GET/POST /api/identity — no credentials included. */
 export interface IdentityInfo {
   account_id: string
   arn: string
   user_id: string
   region: string
   profile: string | null
+}
+
+/** Request body for POST /api/identity with explicit credentials. */
+export interface IdentityRequest {
+  region?: string
+  aws_profile?: string
+  aws_access_key_id?: string
+  aws_secret_access_key?: string
+  aws_session_token?: string
 }
 
 export interface ErrorResponse {

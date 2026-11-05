@@ -31,8 +31,10 @@ export function FindingsPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-100">Security Findings</h1>
           <p className="mt-1 text-slate-500 text-sm">
-            {status === 'complete' && scanResult
+            {scanResult
               ? `${allFindings.length} total findings from ${scanResult.simulated ? 'simulated' : 'live AWS'} resource analysis`
+              : status === 'error'
+              ? 'Scan failed — see error below'
               : 'Run a scan to see findings'}
           </p>
         </div>
@@ -52,7 +54,7 @@ export function FindingsPage() {
       )}
 
       {/* No scan yet */}
-      {status === 'idle' && !scanResult && (
+      {!scanResult && status !== 'scanning' && status !== 'error' && (
         <EmptyState
           title="Run a scan to see findings"
           description="Navigate to Scan to trigger a security analysis."

@@ -44,6 +44,23 @@ CORS_ORIGINS: list[str] = [
 ]
 
 # ---------------------------------------------------------------------------
+# Demo-only deployment mode
+# ---------------------------------------------------------------------------
+
+# Set ALLOW_LIVE_AWS_SCANS=false to restrict the application to Demo Mode only.
+# This is intended for public or shared deployments where live AWS credential
+# entry should not be permitted.
+#
+# When false, all endpoints that create a Boto3 session or accept AWS
+# credentials are rejected with HTTP 403 LIVE_AWS_DISABLED.
+#
+# Demo-mode scanning and all demo-related APIs continue to work normally.
+# Default: true (allows live scanning in local development).
+ALLOW_LIVE_AWS_SCANS: bool = os.environ.get(
+    "ALLOW_LIVE_AWS_SCANS", "true"
+).lower().strip() not in ("false", "0", "no", "off")
+
+# ---------------------------------------------------------------------------
 # Provider factory
 # ---------------------------------------------------------------------------
 
@@ -56,24 +73,44 @@ def get_simulated_provider():
     return SimulatedScannerProvider()
 
 
-def get_boto3_provider(profile: str | None = None, region: str | None = None):
-    """Return a Boto3ScannerProvider for the given profile and region.
+def get_boto3_provider(
+    profile: str | None = None,
+    region: str | None = None,
+    access_key_id: str | None = None,
+    secret_access_key: str | None = None,
+    session_token: str | None = None,
+):
+    """Return a Boto3ScannerProvider for the given profile or explicit credentials.
+
+    When access_key_id and secret_access_key are supplied, the provider uses
+    them directly and does NOT fall back to the profile or the default
+    credential chain.
+
+    When only profile is supplied, the existing profile-based path is used.
 
     Parameters
     ----------
     profile:
-        AWS CLI profile name. Defaults to DEFAULT_AWS_PROFILE (env var AWS_PROFILE, or 'default').
-        Never hardcoded — always resolved from request or env var.
+        AWS CLI profile name. Used when explicit credentials are absent.
     region:
-        AWS region for EC2 operations. Defaults to DEFAULT_AWS_REGION.
+        AWS region for EC2 operations.
+    access_key_id, secret_access_key, session_token:
+        Explicit credentials for the local-testing credential-entry flow.
+        Never logged. Never persisted beyond this request.
 
-    Raises CredentialError if the profile is missing or credentials are invalid.
+    Raises CredentialError if credentials are missing or invalid.
     Never called for demo mode.
     """
     from providers.boto3_provider import Boto3ScannerProvider
     resolved_profile = profile or DEFAULT_AWS_PROFILE
     resolved_region = region or DEFAULT_AWS_REGION
-    return Boto3ScannerProvider(profile_name=resolved_profile, region=resolved_region)
+    return Boto3ScannerProvider(
+        profile_name=resolved_profile,
+        region=resolved_region,
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
+        session_token=session_token,
+    )
 
 
 def get_scanner_provider():

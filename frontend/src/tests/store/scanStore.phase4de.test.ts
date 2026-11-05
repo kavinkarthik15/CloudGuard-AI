@@ -41,6 +41,9 @@ function mockScanResult(simulated = true): ScanResult {
       s3_buckets_requested: 5,
       s3_buckets_scanned: 5,
       s3_buckets_failed: 0,
+      ec2_sgs_discovered: 3,
+      ec2_sgs_evaluated: 3,
+      ec2_sgs_failed: 0,
     },
   }
 }
@@ -247,7 +250,7 @@ describe('setAwsProfile with region mode', () => {
         scanResult: mockScanResult(false),
         status: 'complete',
         identityStatus: 'verified',
-        verifiedFor: { profile: 'profile-a', region: 'eu-north-1' },
+        verifiedFor: { profile: 'profile-a', region: 'eu-north-1', verificationGen: 1 },
       })
     })
 
