@@ -16,8 +16,9 @@
  */
 import type { ErrorResponse, IdentityInfo, ProfilesResponse, RegionsResponse, ScanRequest, ScanResult } from '../types/findings'
 
-const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string) || 'http://127.0.0.1:8000'
-
+const BASE_URL =
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
+  (import.meta.env.PROD ? '' : 'http://127.0.0.1:8000')
 // ---------------------------------------------------------------------------
 // Typed error class
 // ---------------------------------------------------------------------------
